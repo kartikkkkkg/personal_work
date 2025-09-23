@@ -32,13 +32,13 @@ except Exception as e:
 
 # --- Step 1: Extract IDs from Comments with progress bar ---
 def extract_ids(comment):
-    cw = re.search(r'CW#\d{6}', str(comment))
-    bank = re.search(r'\b\d{7}\b', str(comment))
-    project = re.search(r'\b[12]\d{7}\b', str(comment))
+    cw = re.findall(r'CW#\d{6}', str(comment))
+    bank = re.findall(r'\b\d{7}\b', str(comment))
+    project = re.findall(r'\b[12]\d{7}\b', str(comment))
     return pd.Series({
-        "CW_Number": cw.group(0) if cw else None,
-        "Bank_ID": bank.group(0) if bank else None,
-        "Project_ID": project.group(0) if project else None
+        "CW_Number": ";".join(cw) if cw else None,
+        "Bank_ID": ";".join(bank) if bank else None,
+        "Project_ID": ";".join(project) if project else None
     })
 
 df[["CW_Number", "Bank_ID", "Project_ID"]] = df["Comments"].progress_apply(extract_ids)
@@ -49,8 +49,17 @@ df = df[(df["Status"].str.lower() == "pending") & (df["Latest Approver Name"].st
 
 # --- Step 3: Merge rows on Project_ID with progress bar ---
 def merge_rows(group):
+    # This will hold the final merged row
     merged = group.iloc[0].copy()
+    
+    # Merge the 'Comments' column by joining unique values with a semicolon
     merged["Comments"] = ";".join(group["Comments"].dropna().astype(str).unique())
+
+    # Merge the new ID columns by joining unique values with a semicolon
+    # This is the new part to add!
+    for col in ["CW_Number", "Bank_ID", "Project_ID"]:
+        merged[col] = ";".join(group[col].dropna().astype(str).unique())
+    
     return merged
 
 df = df.groupby("Project_ID").progress_apply(merge_rows).reset_index(drop=True)
