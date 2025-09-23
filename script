@@ -36,22 +36,23 @@ except Exception as e:
 df["Status"] = df["Status"].fillna('').astype(str).str.strip().str.lower()
 df["Latest Approver Name"] = df["Latest Approver Name"].fillna('').astype(str).str.strip()
 
-df = df[(df["Status"] == "pending") & (df["Latest Approver Name"].str.contains("Sybi|Aini", case=False, na=False))]
+df = df[(df["Status"] == "pending") & (df["Latest Approver Name"].str.contains("Aini Ayoub|Sybil Fitzgerald", case=False, na=False))]
 
 print(f"\nAfter filtering, there are {len(df)} rows remaining.")
-print(f"After filtering, there are {df['Position ID'].nunique()} unique Position IDs.")
+print(f"After filtering, there are {df['Position Code'].nunique()} unique Position IDs.")
 
 
-# --- Step 2: Merge rows based on Position ID and extract IDs from merged comments ---
+# --- Step 2: Merge rows based on Position Code and extract IDs from merged comments ---
 def merge_and_extract(group):
     merged = group.iloc[0].copy()
     
-    # Merge comments into a single string for this Position ID
+    # Merge comments into a single string for this Position Code
     merged_comments = ";".join(group["Comments"].dropna().astype(str).unique())
     merged["Comments"] = merged_comments
     
     # Extract IDs from the newly merged comment string
-    cw_numbers = re.findall(r'CW#\d{6}', merged_comments)
+    # The CW Number regex is changed to find any 6-digit number
+    cw_numbers = re.findall(r'\b\d{6}\b', merged_comments)
     bank_ids = re.findall(r'\b\d{7}\b', merged_comments)
     project_ids = re.findall(r'\b[12]\d{7}\b', merged_comments)
     
@@ -62,7 +63,7 @@ def merge_and_extract(group):
     
     return merged
 
-df_final = df.groupby("Position ID").progress_apply(merge_and_extract).reset_index(drop=True)
+df_final = df.groupby("Position Code").progress_apply(merge_and_extract).reset_index(drop=True)
 
 
 # --- Step 3: Keep only the required columns ---
