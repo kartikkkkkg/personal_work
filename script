@@ -31,47 +31,47 @@ except Exception as e:
     print("Please check your file path and password.")
     exit()
 
-# --- Step 1: Extract IDs from Comments with progress bar ---
-def extract_ids(comment):
-    cw = re.findall(r'CW#\d{6}', str(comment))
-    bank = re.findall(r'\b\d{7}\b', str(comment))
-    project = re.findall(r'\b[12]\d{7}\b', str(comment))
-    return pd.Series({
-        "CW_Number": ";".join(cw) if cw else None,
-        "Bank_ID": ";".join(bank) if bank else None,
-        "Project_ID": ";".join(project) if project else None
-    })
+# --- Step 1: Filter rows first based on your specific criteria ---
+# We will clean the columns before filtering to handle empty values and spaces
+df["Status"] = df["Status"].fillna('').astype(str).str.strip().str.lower()
+df["Latest Approver Name"] = df["Latest Approver Name"].fillna('').astype(str).str.strip()
 
-df[["CW_Number", "Bank_ID", "Project_ID"]] = df["Comments"].progress_apply(extract_ids)
+df = df[(df["Status"] == "pending") & (df["Latest Approver Name"].str.contains("Sybi|Aini", case=False, na=False))]
 
-# --- Step 2: Filter rows ---
-# Using "Status" and "Latest Approver Name"
-df = df[(df["Status"].str.lower() == "pending") & (df["Latest Approver Name"].str.contains("Sybi|Aini", case=False, na=False))]
+print(f"\nAfter filtering, there are {len(df)} rows remaining.")
+print(f"After filtering, there are {df['Position ID'].nunique()} unique Position IDs.")
 
-# --- Step 3: Merge rows on Project_ID with progress bar ---
-def merge_rows(group):
-    # This will hold the final merged row
+
+# --- Step 2: Merge rows based on Position ID and extract IDs from merged comments ---
+def merge_and_extract(group):
     merged = group.iloc[0].copy()
     
-    # Merge the 'Comments' column by joining unique values with a semicolon
-    merged["Comments"] = ";".join(group["Comments"].dropna().astype(str).unique())
-
-    # Merge the new ID columns by joining unique values with a semicolon
-    for col in ["CW_Number", "Bank_ID", "Project_ID"]:
-        merged[col] = ";".join(group[col].dropna().astype(str).unique())
+    # Merge comments into a single string for this Position ID
+    merged_comments = ";".join(group["Comments"].dropna().astype(str).unique())
+    merged["Comments"] = merged_comments
+    
+    # Extract IDs from the newly merged comment string
+    cw_numbers = re.findall(r'CW#\d{6}', merged_comments)
+    bank_ids = re.findall(r'\b\d{7}\b', merged_comments)
+    project_ids = re.findall(r'\b[12]\d{7}\b', merged_comments)
+    
+    # Save extracted IDs as semicolon-separated strings, with no duplicates
+    merged["CW_Number"] = ";".join(pd.Series(cw_numbers).unique()) if cw_numbers else None
+    merged["Bank_ID"] = ";".join(pd.Series(bank_ids).unique()) if bank_ids else None
+    merged["Project_ID"] = ";".join(pd.Series(project_ids).unique()) if project_ids else None
     
     return merged
 
-df = df.groupby("Project_ID").progress_apply(merge_rows).reset_index(drop=True)
+df_final = df.groupby("Position ID").progress_apply(merge_and_extract).reset_index(drop=True)
 
-# --- Step 4: Keep only 20 required columns + new ones ---
-# 👉 Replace with your actual column names
+
+# --- Step 3: Keep only the required columns ---
 selected_columns = [
     "col1", "col2", "col3", "col4", "col5", "col6", "col7", "col8", "col9", "col10", 
     "col11", "col12", "col13", "col14", "col15", "col16", "col17", "col18", "col19", "col20", 
-    "CW_Number", "Bank_ID", "Project_ID"
+    "Comments", "CW_Number", "Bank_ID", "Project_ID"
 ]
-df_final = df[selected_columns]
+df_final = df_final[selected_columns]
 
 # --- Save to new Excel, avoiding overwriting ---
 base_filename = "cleaned_output.xlsx"
