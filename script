@@ -1,8 +1,20 @@
 import pandas as pd
+import msoffcrypto
+import io
 import re
 
-# Load Excel
-df = pd.read_excel("input.xlsx")
+# --- Load password-protected Excel ---
+file_path = "input.xlsx"   # Your file name
+password = "your_password" # Put the Excel password here
+
+with open(file_path, "rb") as f:
+    decrypted = io.BytesIO()
+    file = msoffcrypto.OfficeFile(f)
+    file.load_key(password=password)
+    file.decrypt(decrypted)
+
+# Load into pandas
+df = pd.read_excel(decrypted)
 
 # --- Step 1: Extract IDs from comments ---
 def extract_ids(comment):
@@ -23,16 +35,14 @@ df = df[(df["status"].str.lower() == "pending") &
         (df["approver"].str.contains("Sybi|Aini", case=False, na=False))]
 
 # --- Step 3: Merge rows on Project_ID ---
-# Concatenate comments with ';' and keep first value for other columns
 def merge_rows(group):
-    merged = group.iloc[0].copy()  # start with first row
+    merged = group.iloc[0].copy()
     merged["comments"] = ";".join(group["comments"].dropna().astype(str).unique())
     return merged
 
 df = df.groupby("Project_ID").apply(merge_rows).reset_index(drop=True)
 
 # --- Step 4: Keep only 20 required columns + new ones ---
-# 👉 Replace below with your actual column names
 selected_columns = [
     "col1", "col2", "col3", "col4", "col5",
     "col6", "col7", "col8", "col9", "col10",
@@ -43,5 +53,5 @@ selected_columns = [
 
 df_final = df[selected_columns]
 
-# Save to new Excel
+# --- Save to new Excel ---
 df_final.to_excel("cleaned_output.xlsx", index=False)
