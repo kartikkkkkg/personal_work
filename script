@@ -41,11 +41,11 @@ def extract_ids(comment):
         "Project_ID": project.group(0) if project else None
     })
 
-# The progress bar will now work on the "Comments" column
 df[["CW_Number", "Bank_ID", "Project_ID"]] = df["Comments"].progress_apply(extract_ids)
 
 # --- Step 2: Filter rows ---
-df = df[(df["status"].str.lower() == "pending") & (df["approver"].str.contains("Sybi|Aini", case=False, na=False))]
+# Using "Status" and "Latest Approver Name"
+df = df[(df["Status"].str.lower() == "pending") & (df["Latest Approver Name"].str.contains("Sybi|Aini", case=False, na=False))]
 
 # --- Step 3: Merge rows on Project_ID with progress bar ---
 def merge_rows(group):
@@ -53,7 +53,6 @@ def merge_rows(group):
     merged["Comments"] = ";".join(group["Comments"].dropna().astype(str).unique())
     return merged
 
-# The progress bar will now work for the merge operation
 df = df.groupby("Project_ID").progress_apply(merge_rows).reset_index(drop=True)
 
 # --- Step 4: Keep only 20 required columns + new ones ---
