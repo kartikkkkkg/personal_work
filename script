@@ -2,37 +2,45 @@ import pandas as pd
 import msoffcrypto
 import io
 import re
+from tqdm import tqdm
 
-# --- Load password-protected Excel ---
-file_path = "input.xlsx"   # Your file name
-password = "your_password" # Put the Excel password here
+# --- Configuration ---
+file_path = "input.xlsx"  # Replace with your Excel file name
+password = "your_password"   # Replace with your Excel password
 
-with open(file_path, "rb") as f:
-    decrypted = io.BytesIO()
-    file = msoffcrypto.OfficeFile(f)
-    file.load_key(password=password)
-    file.decrypt(decrypted)
+# --- Try to read the password-protected Excel file ---
+try:
+    with open(file_path, "rb") as f:
+        decrypted = io.BytesIO()
+        office_file = msoffcrypto.OfficeFile(f)
+        office_file.load_key(password=password)
+        office_file.decrypt(decrypted)
+        
+    df = pd.read_excel(decrypted)
 
-# Load into pandas
-df = pd.read_excel(decrypted)
+except Exception as e:
+    print(f"An error occurred: {e}")
+    print("Please check your file path and password.")
+    # Exit the script if an error occurs
+    exit()
 
-# --- Step 1: Extract IDs from comments ---
+# --- Step 1: Extract IDs from comments with a progress bar ---
 def extract_ids(comment):
     cw = re.search(r'CW#\d{6}', str(comment))
     bank = re.search(r'\b\d{7}\b', str(comment))
     project = re.search(r'\b[12]\d{7}\b', str(comment))
-    
     return pd.Series({
         "CW_Number": cw.group(0) if cw else None,
         "Bank_ID": bank.group(0) if bank else None,
         "Project_ID": project.group(0) if project else None
     })
 
-df[["CW_Number", "Bank_ID", "Project_ID"]] = df["comments"].apply(extract_ids)
+# The progress bar will wrap around the 'comments' column processing
+tqdm.pandas(desc="Extracting IDs")
+df[["CW_Number", "Bank_ID", "Project_ID"]] = df["comments"].progress_apply(extract_ids)
 
 # --- Step 2: Filter rows ---
-df = df[(df["status"].str.lower() == "pending") &
-        (df["approver"].str.contains("Sybi|Aini", case=False, na=False))]
+df = df[(df["status"].str.lower() == "pending") & (df["approver"].str.contains("Sybi|Aini", case=False, na=False))]
 
 # --- Step 3: Merge rows on Project_ID ---
 def merge_rows(group):
@@ -40,18 +48,16 @@ def merge_rows(group):
     merged["comments"] = ";".join(group["comments"].dropna().astype(str).unique())
     return merged
 
-df = df.groupby("Project_ID").apply(merge_rows).reset_index(drop=True)
+df = df.groupby("Project_ID").progress_apply(merge_rows).reset_index(drop=True)
 
 # --- Step 4: Keep only 20 required columns + new ones ---
 selected_columns = [
-    "col1", "col2", "col3", "col4", "col5",
-    "col6", "col7", "col8", "col9", "col10",
-    "col11", "col12", "col13", "col14", "col15",
-    "col16", "col17", "col18", "col19", "col20",
+    "col1", "col2", "col3", "col4", "col5", "col6", "col7", "col8", "col9", "col10", 
+    "col11", "col12", "col13", "col14", "col15", "col16", "col17", "col18", "col19", "col20", 
     "CW_Number", "Bank_ID", "Project_ID"
 ]
-
 df_final = df[selected_columns]
 
 # --- Save to new Excel ---
 df_final.to_excel("cleaned_output.xlsx", index=False)
+print("Processing complete. The cleaned data has been saved to 'cleaned_output.xlsx'.")
