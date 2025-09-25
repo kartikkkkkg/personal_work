@@ -1,0 +1,159 @@
+import pandas as pd
+import msoffcrypto
+import io
+import re
+import os
+from tqdm.autonotebook import tqdm
+
+# Register tqdm with pandas to show progress bars
+tqdm.pandas(desc="Processing data")
+
+# --- Configuration for all files ---
+file_path = "input.xlsx"  # Your initial raw data file
+password = "your_password"   # Your Excel password
+new_data_filename = "ProjectID_clarity.xlsx" # The new Excel file with lookup data
+final_output_filename = "final_report.xlsx" # The name for your final output file
+
+# --- Load password-protected Excel ---
+try:
+    with open(file_path, "rb") as f:
+        decrypted = io.BytesIO()
+        office_file = msoffcrypto.OfficeFile(f)
+        office_file.load_key(password=password)
+        office_file.decrypt(decrypted)
+        
+    df = pd.read_excel(decrypted)
+    print("Successfully read the Excel file!")
+
+except FileNotFoundError:
+    print(f"Error: The file '{file_path}' was not found.")
+    exit()
+except Exception as e:
+    print(f"An error occurred: {e}")
+    print("Please check your file path and password.")
+    exit()
+
+# --- Step 1: Filter rows first based on your specific criteria ---
+df["Status"] = df["Status"].fillna('').astype(str).str.strip().str.lower()
+df["Latest Approver Name"] = df["Latest Approver Name"].fillna('').astype(str).str.strip()
+
+df = df[(df["Status"] == "pending") & (df["Latest Approver Name"].str.contains("Aini Ayoub|Sybil Fitzgerald", case=False, na=False))]
+
+print(f"\nAfter filtering, there are {len(df)} rows remaining.")
+print(f"After filtering, there are {df['Position Code'].nunique()} unique Position IDs.")
+
+
+# --- Step 2: Merge rows based on Position Code and extract IDs from merged comments ---
+def merge_and_extract(group):
+    merged = group.iloc[0].copy()
+    merged_comments = ";".join(group["Comments"].dropna().astype(str).unique())
+    merged["Comments"] = merged_comments
+    
+    cw_numbers = re.findall(r'[Cc][Ww]\d{6}|\b\d{6}\b', merged_comments)
+    bank_ids = re.findall(r'\b\d{7}\b', merged_comments)
+    project_ids = re.findall(r'\b[12]\d{7}\b', merged_comments)
+    
+    merged["CW_Number"] = ";".join(pd.Series(cw_numbers).unique()) if cw_numbers else None
+    merged["Bank_ID"] = ";".join(pd.Series(bank_ids).unique()) if bank_ids else None
+    merged["Project_ID"] = ";".join(pd.Series(project_ids).unique()) if project_ids else None
+    
+    return merged
+
+df_final = df.groupby("Position Code").progress_apply(merge_and_extract).reset_index(drop=True)
+
+
+# --- Step 3: Load the new data with multiple sheets for joins ---
+try:
+    df_new_sheets = pd.read_excel(new_data_filename, sheet_name=None)
+    df_project_clarity = df_new_sheets['ProjectID_clarity']
+    df_critical = df_new_sheets['Critical']
+    print(f"\nSuccessfully loaded '{new_data_filename}' for joining.")
+except FileNotFoundError:
+    print(f"Error: The new data file '{new_data_filename}' was not found. Skipping joins.")
+    # Set the dataframes to empty to allow the rest of the script to run
+    df_project_clarity = pd.DataFrame()
+    df_critical = pd.DataFrame()
+except KeyError:
+    print(f"Error: Could not find one of the required sheets in '{new_data_filename}'. Skipping joins.")
+    df_project_clarity = pd.DataFrame()
+    df_critical = pd.DataFrame()
+
+
+# --- Step 4: Join from the 'Critical' sheet based on Job family ---
+if not df_critical.empty:
+    # Prepare the lookup data from the Critical sheet
+    df_critical['Job Family'] = df_critical['Job Family'].astype(str).str.strip()
+    critical_jf_map = df_critical.set_index('Job Family')['Critical JF'].to_dict()
+
+    # Create a new column in the main dataframe based on the lookup
+    df_final['Job family'] = df_final['Job family'].astype(str).str.strip()
+    df_final['Critical JF'] = df_final['Job family'].apply(lambda x: critical_jf_map.get(x, 'Others'))
+    print("✅ Joined 'Critical JF' data.")
+else:
+    print("⚠️ Skipping 'Critical' sheet join as the file/sheet was not found.")
+    df_final['Critical JF'] = 'Others' # Default to others if join is skipped
+
+
+# --- Step 5: Join from the 'ProjectID_clarity' sheet based on Project ID ---
+if not df_project_clarity.empty:
+    # Prepare the lookup data from the ProjectID_clarity sheet
+    df_project_clarity['Project ID'] = df_project_clarity['Project ID'].astype(str).str.strip()
+    project_clarity_map = df_project_clarity.set_index('Project ID')
+
+    def lookup_and_join(project_ids_str):
+        if pd.isna(project_ids_str) or not isinstance(project_ids_str, str):
+            return None, None, None
+        
+        ids_list = [id.strip() for id in project_ids_str.split(';')]
+        
+        project_names = []
+        lifecycle_statuses = []
+        qpr_values = []
+        
+        for pid in ids_list:
+            if pid in project_clarity_map.index:
+                row = project_clarity_map.loc[pid]
+                project_names.append(row['Project Name'])
+                lifecycle_statuses.append(row['Lifecycle Status'])
+                qpr_values.append(row['Quarterly Performance Review(QPR)'])
+        
+        return (
+            ";".join(pd.Series(project_names).dropna().unique()) if project_names else None,
+            ";".join(pd.Series(lifecycle_statuses).dropna().unique()) if lifecycle_statuses else None,
+            ";".join(pd.Series(qpr_values).dropna().unique()) if qpr_values else None
+        )
+
+    # Apply the lookup and join function to the 'Project_ID' column
+    df_final[['Project Name', 'Lifecycle Status', 'Quarterly Performance Review(QPR)']] = df_final['Project_ID'].progress_apply(
+        lambda x: pd.Series(lookup_and_join(x))
+    )
+    print("✅ Joined 'ProjectID_clarity' data.")
+else:
+    print("⚠️ Skipping 'ProjectID_clarity' sheet join as the file/sheet was not found.")
+    df_final[['Project Name', 'Lifecycle Status', 'Quarterly Performance Review(QPR)']] = None, None, None
+
+
+# --- Step 6: Keep all required columns including new ones ---
+# 👉 Update this list with the correct 20 column names from your original file
+selected_columns = [
+    "col1", "col2", "col3", "col4", "col5", "col6", "col7", "col8", "col9", "col10", 
+    "col11", "col12", "col13", "col14", "col15", "col16", "col17", "col18", "col19", "col20", 
+    "Comments", "CW_Number", "Bank_ID", "Project_ID", "Job family", "Critical JF",
+    "Project Name", "Lifecycle Status", "Quarterly Performance Review(QPR)"
+]
+
+# Re-order the columns to match your desired output
+df_final = df_final[selected_columns]
+
+# --- Step 7: Save to new Excel, avoiding overwriting ---
+base_filename = final_output_filename
+counter = 1
+output_filename = base_filename
+
+while os.path.exists(output_filename):
+    name, ext = os.path.splitext(base_filename)
+    output_filename = f"{name}_{counter}{ext}"
+    counter += 1
+
+df_final.to_excel(output_filename, index=False)
+print(f"\n🎉 All processing complete. The final report has been saved to '{output_filename}'.")
