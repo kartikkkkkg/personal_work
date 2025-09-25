@@ -51,8 +51,8 @@ def merge_and_extract(group):
     merged["Comments"] = merged_comments
     
     # Extract IDs from the newly merged comment string
-    # The CW Number regex is changed to find any 6-digit number
-    cw_numbers = re.findall(r'\b\d{6}\b', merged_comments)
+    # NEW REGEX: Finds any 6-digit number OR a case-insensitive "CW" followed by 6 digits (no #)
+    cw_numbers = re.findall(r'[Cc][Ww]\d{6}|\b\d{6}\b', merged_comments)
     bank_ids = re.findall(r'\b\d{7}\b', merged_comments)
     project_ids = re.findall(r'\b[12]\d{7}\b', merged_comments)
     
