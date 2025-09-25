@@ -1,0 +1,18 @@
+import pandas as pd
+
+# --- Configuration for new files ---
+new_data_filename = "ProjectID_clarity.xlsx"
+
+try:
+    df_new_sheets = pd.read_excel(new_data_filename, sheet_name=None)
+    df_critical = df_new_sheets['Critical']
+
+    # --- Print all column names exactly as they are ---
+    print("Column names in the 'Critical' sheet:")
+    for col in df_critical.columns:
+        print(f"'{col}'")
+
+except FileNotFoundError:
+    print(f"Error: The new data file '{new_data_filename}' was not found.")
+except KeyError:
+    print(f"Error: Could not find the 'Critical' sheet in '{new_data_filename}'.")
