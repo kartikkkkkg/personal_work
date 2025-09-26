@@ -39,6 +39,7 @@ except Exception as e:
 df["Status"] = df["Status"].fillna('').astype(str).str.strip().str.lower()
 df["Latest Approver Name"] = df["Latest Approver Name"].fillna('').astype(str).str.strip()
 
+# Corrected Approver Name Filter
 df = df[(df["Status"] == "pending") & (df["Latest Approver Name"].str.contains("Aini Ayoub|Sybi", case=False, na=False))]
 
 print(f"\nAfter filtering, there are {len(df)} rows remaining.")
@@ -85,48 +86,6 @@ try:
 except Exception as e:
     print(f"Error loading '{mapping_filename}'. Skipping cost/domain joins: {e}")
     df_mapping = pd.DataFrame()
-
-
-# --- DIAGNOSTIC: Check for Duplicate Keys (Causing the ValueError) ---
-print("\n--- DIAGNOSTIC CHECK FOR DUPLICATES ---")
-
-# Check 1: Mapping File (Country and Business Function Lvl6 Name)
-if not df_mapping.empty:
-    # Normalize keys for accurate count
-    df_mapping['Country_Check'] = df_mapping['Country'].astype(str).str.strip().str.lower()
-    df_mapping['BF_L6_Check'] = df_mapping['Business Function Lvl6 Name'].astype(str).str.strip().str.lower()
-
-    # Calculate duplicates for 'Country'
-    total_rows = len(df_mapping)
-    unique_rows_country = len(df_mapping.drop_duplicates(subset=['Country_Check']))
-    print(f"'{mapping_filename}' - Country: {total_rows - unique_rows_country} duplicate keys found.")
-
-    # Calculate duplicates for 'Business Function Lvl6 Name'
-    unique_rows_bf = len(df_mapping.drop_duplicates(subset=['BF_L6_Check']))
-    print(f"'{mapping_filename}' - Business Function Lvl6 Name: {total_rows - unique_rows_bf} duplicate keys found.")
-    
-    # Clean up temporary check columns
-    df_mapping.drop(columns=['Country_Check', 'BF_L6_Check'], inplace=True)
-else:
-    print("Mapping file was not loaded, skipping checks.")
-
-
-# Check 2: Critical Sheet (Job Family)
-if not df_critical.empty:
-    # Normalize key for accurate count
-    df_critical['Job_Family_Check'] = df_critical['Job Family'].astype(str).str.strip().str.lower()
-
-    # Calculate duplicates for 'Job Family'
-    total_rows = len(df_critical)
-    unique_rows_jf = len(df_critical.drop_duplicates(subset=['Job_Family_Check']))
-    print(f"'{new_data_filename}' - Job Family: {total_rows - unique_rows_jf} duplicate keys found.")
-    
-    df_critical.drop(columns=['Job_Family_Check'], inplace=True)
-else:
-    print("Critical sheet was not loaded, skipping checks.")
-
-print("------------------------------------------")
-# --- END DIAGNOSTIC ---
 
 
 # --- Step 4: Cost & Domain Joins from 'mapping' sheet (WITH DUPLICATE RESOLUTION) ---
@@ -185,35 +144,45 @@ else:
     df_final['Critical JF'] = 'Others'
 
 
-# --- Step 6: Join from the 'ProjectID_clarity' sheet based on Project ID ---
+# --- Step 6: Join from the 'ProjectID_clarity' sheet based on Project ID (WITH ROBUST QPR FINDER) ---
 if not df_project_clarity.empty:
     df_project_clarity['Project ID'] = df_project_clarity['Project ID'].astype(str).str.strip()
     project_clarity_map = df_project_clarity.set_index('Project ID')
 
-    def lookup_and_join(project_ids_str):
-        if pd.isna(project_ids_str) or not isinstance(project_ids_str, str):
-            return None, None, None
-        
-        ids_list = [id.strip() for id in project_ids_str.split(';')]
-        project_names, lifecycle_statuses, qpr_values = [], [], []
-        
-        for pid in ids_list:
-            if pid in project_clarity_map.index:
-                row = project_clarity_map.loc[pid]
-                project_names.append(row['Project Name'])
-                lifecycle_statuses.append(row['Lifecycle status'])
-                qpr_values.append(row['Quarterly Performance Review(QPR)'])
-        
-        return (
-            ";".join(pd.Series(project_names).dropna().unique()) if project_names else None,
-            ";".join(pd.Series(lifecycle_statuses).dropna().unique()) if lifecycle_statuses else None,
-            ";".join(pd.Series(qpr_values).dropna().unique()) if qpr_values else None
-        )
+    # FIX: Dynamically find the exact column name for Quarterly Performance Review(QPR) by searching for 'QPR'
+    qpr_col = next((col for col in df_project_clarity.columns if 'QPR' in col.upper()), None)
+    
+    # We define Lifecycle Status here just to ensure we use the correct column name from the project clarity df
+    lifecycle_col = 'Lifecycle status' 
+    
+    if not qpr_col:
+        print("Error: Could not find 'Quarterly Performance Review(QPR)' column in ProjectID_clarity sheet. Please check the spelling/casing.")
+        df_final[['Project Name', 'Lifecycle Status', 'Quarterly Performance Review(QPR)']] = None, None, None
+    else:
+        def lookup_and_join(project_ids_str):
+            if pd.isna(project_ids_str) or not isinstance(project_ids_str, str):
+                return None, None, None
+            
+            ids_list = [id.strip() for id in project_ids_str.split(';')]
+            project_names, lifecycle_statuses, qpr_values = [], [], []
+            
+            for pid in ids_list:
+                if pid in project_clarity_map.index:
+                    row = project_clarity_map.loc[pid]
+                    project_names.append(row['Project Name'])
+                    lifecycle_statuses.append(row[lifecycle_col]) 
+                    qpr_values.append(row[qpr_col]) # Use the dynamically found column name
+            
+            return (
+                ";".join(pd.Series(project_names).dropna().unique()) if project_names else None,
+                ";".join(pd.Series(lifecycle_statuses).dropna().unique()) if lifecycle_statuses else None,
+                ";".join(pd.Series(qpr_values).dropna().unique()) if qpr_values else None
+            )
 
-    df_final[['Project Name', 'Lifecycle Status', 'Quarterly Performance Review(QPR)']] = df_final['Project_ID'].progress_apply(
-        lambda x: pd.Series(lookup_and_join(x))
-    )
-    print("✅ Joined 'ProjectID_clarity' data.")
+        df_final[['Project Name', 'Lifecycle Status', 'Quarterly Performance Review(QPR)']] = df_final['Project_ID'].progress_apply(
+            lambda x: pd.Series(lookup_and_join(x))
+        )
+        print("✅ Joined 'ProjectID_clarity' data.")
 else:
     print("⚠️ Skipping 'ProjectID_clarity' sheet join.")
     df_final[['Project Name', 'Lifecycle Status', 'Quarterly Performance Review(QPR)']] = None, None, None
