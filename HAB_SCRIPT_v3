@@ -39,7 +39,8 @@ except Exception as e:
 df["Status"] = df["Status"].fillna('').astype(str).str.strip().str.lower()
 df["Latest Approver Name"] = df["Latest Approver Name"].fillna('').astype(str).str.strip()
 
-df = df[(df["Status"] == "pending") & (df["Latest Approver Name"].str.contains("Aini Ayoub|Sybil Fitzgerald", case=False, na=False))]
+# FIX: Corrected "Sybil Fitzgerald" to "Sybi"
+df = df[(df["Status"] == "pending") & (df["Latest Approver Name"].str.contains("Aini Ayoub|Sybi", case=False, na=False))]
 
 print(f"\nAfter filtering, there are {len(df)} rows remaining.")
 print(f"After filtering, there are {df['Position Code'].nunique()} unique Position IDs.")
@@ -65,14 +66,13 @@ df_final = df.groupby("Position Code").progress_apply(merge_and_extract).reset_i
 
 
 # --- Step 3: Load the new data files for all subsequent joins ---
-# Load ProjectID_clarity.xlsx
 try:
     df_new_sheets = pd.read_excel(new_data_filename, sheet_name=None)
     df_project_clarity = df_new_sheets['ProjectID_clarity']
     df_critical = df_new_sheets['Critical']
     df_project_clarity.columns = df_project_clarity.columns.str.strip()
     df_critical.columns = df_critical.columns.str.strip()
-    print(f"Successfully loaded '{new_data_filename}' for joins.")
+    print(f"\nSuccessfully loaded '{new_data_filename}' for joins.")
 except Exception as e:
     print(f"Error loading '{new_data_filename}'. Skipping joins: {e}")
     df_project_clarity = pd.DataFrame()
@@ -88,31 +88,34 @@ except Exception as e:
     df_mapping = pd.DataFrame()
 
 
-# --- Step 4: Cost & Domain Joins from 'mapping' sheet ---
+# --- Step 4: Cost & Domain Joins from 'mapping' sheet (KEYS NORMALIZED) ---
 if not df_mapping.empty:
     
     # 4a: Cost Mapping (Country -> Cost)
-    # Create map where 'Country' in main file links to 'high/low' in mapping file
-    df_mapping['Country'] = df_mapping['Country'].astype(str).str.strip()
+    # NORMALIZE KEY: Clean, convert to string, strip spaces, and lowercase for reliable matching
+    df_mapping['Country'] = df_mapping['Country'].astype(str).str.strip().str.lower()
     cost_map = df_mapping.set_index('Country')['high/low'].to_dict()
-    df_final['Country'] = df_final['Country'].astype(str).str.strip()
-    df_final['Cost'] = df_final['Country'].apply(lambda x: cost_map.get(x, None)) # Use None for no match
+    
+    df_final['Country_Key'] = df_final['Country'].astype(str).str.strip().str.lower()
+    df_final['Cost'] = df_final['Country_Key'].apply(lambda x: cost_map.get(x, None))
+    df_final.drop(columns=['Country_Key'], inplace=True)
     print("✅ Joined 'Cost' data based on 'Country'.")
 
     # 4b: Domain Mapping (Business Function L6 -> MT Domain, MT-1 Domain, Cost Cat)
-    # Create map where 'Business Function L6' links to the domain columns
-    df_mapping['Business Function Lvl6 Name'] = df_mapping['Business Function Lvl6 Name'].astype(str).str.strip()
+    # NORMALIZE KEY: Clean, convert to string, strip spaces, and lowercase for reliable matching
+    df_mapping['Business Function Lvl6 Name'] = df_mapping['Business Function Lvl6 Name'].astype(str).str.strip().str.lower()
     domain_map = df_mapping.set_index('Business Function Lvl6 Name')[['MT Domain', 'MT-1 Domain', 'Cost Cat']].to_dict('index')
     
-    df_final['Business Function L6'] = df_final['Business Function L6'].astype(str).str.strip()
+    df_final['Business Function L6_Key'] = df_final['Business Function L6'].astype(str).str.strip().str.lower()
     
     def domain_lookup(bf_l6):
         return domain_map.get(bf_l6, {'MT Domain': None, 'MT-1 Domain': None, 'Cost Cat': None})
 
-    domain_results = df_final['Business Function L6'].apply(domain_lookup)
+    domain_results = df_final['Business Function L6_Key'].apply(domain_lookup)
     df_final['MT Domain'] = [r['MT Domain'] for r in domain_results]
     df_final['MT-1 Domain'] = [r['MT-1 Domain'] for r in domain_results]
     df_final['Cost Category'] = [r['Cost Cat'] for r in domain_results]
+    df_final.drop(columns=['Business Function L6_Key'], inplace=True)
     print("✅ Joined 'MT Domain', 'MT-1 Domain', and 'Cost Category' data.")
 
 else:
@@ -120,13 +123,15 @@ else:
     df_final[['Cost', 'MT Domain', 'MT-1 Domain', 'Cost Category']] = None, None, None, None
 
 
-# --- Step 5: Join from the 'Critical' sheet based on Job family ---
+# --- Step 5: Join from the 'Critical' sheet based on Job family (KEY NORMALIZED) ---
 if not df_critical.empty:
-    df_critical['Job Family'] = df_critical['Job Family'].astype(str).str.strip()
+    # NORMALIZE KEY
+    df_critical['Job Family'] = df_critical['Job Family'].astype(str).str.strip().str.lower()
     critical_jf_map = df_critical.set_index('Job Family')['Critical JF'].to_dict()
 
-    df_final['Job Family'] = df_final['Job Family'].astype(str).str.strip()
-    df_final['Critical JF'] = df_final['Job Family'].apply(lambda x: critical_jf_map.get(x, 'Others'))
+    df_final['Job Family_Key'] = df_final['Job Family'].astype(str).str.strip().str.lower()
+    df_final['Critical JF'] = df_final['Job Family_Key'].apply(lambda x: critical_jf_map.get(x, 'Others'))
+    df_final.drop(columns=['Job Family_Key'], inplace=True)
     print("✅ Joined 'Critical JF' data.")
 else:
     print("⚠️ Skipping 'Critical' sheet join.")
@@ -135,11 +140,11 @@ else:
 
 # --- Step 6: Join from the 'ProjectID_clarity' sheet based on Project ID ---
 if not df_project_clarity.empty:
+    # NORMALIZE KEY
     df_project_clarity['Project ID'] = df_project_clarity['Project ID'].astype(str).str.strip()
     project_clarity_map = df_project_clarity.set_index('Project ID')
 
     def lookup_and_join(project_ids_str):
-        # (Same function as before, simplified for space)
         if pd.isna(project_ids_str) or not isinstance(project_ids_str, str):
             return None, None, None
         
@@ -169,21 +174,20 @@ else:
 
 
 # --- Step 7: Final Column Selection and Ordering ---
-# Columns are ordered to match the desired output structure (C, D, E insertion)
 selected_columns = [
-    "Bank ID of requestor", # Col A
-    "Business Function",    # Col B
-    "MT Domain",            # Col C (NEW)
-    "MT-1 Domain",          # Col D (NEW)
-    "Cost Category",        # Col E (NEW, Renamed from Cost Cat)
-    "Business Function L6", # Col F
+    "Bank ID of requestor", 
+    "Business Function",
+    "MT Domain",
+    "MT-1 Domain",
+    "Cost Category",
+    "Business Function L6",
     "Position Code",
     "Position Title",
     "Job Family",
     "Critical JF",
     "Country",
     "Location (Location Name)",
-    "Cost",                 # NEW (Inserted after Location)
+    "Cost",
     "Employment Type",
     "Global Grade",
     "Comments",
