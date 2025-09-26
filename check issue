@@ -241,13 +241,15 @@ df_final.sort_values(
     na_position='last'
 )
 print("✅ Final file sorted by MT Domain, MT-1 Domain, and Cost Category.")
-
-
 # --- Step 8: Save to new Excel, ADDING DROPDOWNS ---
 
-# 8a: Define the mapping of output column name to its starting list in the dropdown sheet (Col A, B, C...)
-# 'T&O MT Review' (Output Column 2) needs the list from Dropdown Sheet Column A (Index 0).
-# The rest follow sequentially.
+# 8a: Define Column Mappings for Data Validation (Same as before)
+DROPDOWN_COL_START_INDEX = selected_columns.index("Spans (of direct reports)") + 1
+DROPDOWN_COLUMNS_WITH_LISTS = [
+    "T&O MT Review", "HRBP Review", "Have you considered an Apprentice for this role?", 
+    "Why not low Cost Location?", "Niche Skillset", "TA Confirmed Skillset not available in Hubs", 
+    "If Reg Requirement pls state which Reg", "Critical Replacement on Fin Outlook", "3 month data volume trend"
+]
 DROPDOWN_MAPPING = {
     "T&O MT Review": 0, # Col A (Index 0) of the dropdown sheet
     "HRBP Review": 1, 
@@ -265,9 +267,7 @@ try:
     df_dropdown = pd.read_excel(mapping_filename, sheet_name='drop-down')
     print("Successfully loaded 'drop-down' sheet for validation.")
 except Exception as e:
-    print(f"Error loading 'drop-down' sheet: {e}. Saving without dropdowns.")
-    
-    # Fallback Save (Saves without custom formatting/dropdowns)
+    # ... (omitted fallback save code for simplicity)
     base_filename = final_output_filename
     counter = 1
     output_filename = base_filename
@@ -276,7 +276,7 @@ except Exception as e:
         output_filename = f"{name}_{counter}{ext}"
         counter += 1
     df_final.to_excel(output_filename, index=False)
-    print(f"\nFATAL ERROR: Could not apply dropdowns. Report saved to '{output_filename}' without them.")
+    print(f"\nFATAL ERROR: Could not apply dropdowns. Report saved to '{output_filename}' without them. Error: {e}")
     exit()
 
 # 8c: Save DataFrame to a Temporary File
@@ -284,18 +284,17 @@ temp_output_filename = "temp_output.xlsx"
 df_final.to_excel(temp_output_filename, index=False, engine='openpyxl')
 
 
-# 8d: Apply Data Validation using openpyxl
+# 8d: Apply Data Validation using openpyxl (FIXED)
 try:
     wb = load_workbook(temp_output_filename)
     ws = wb.active
     
-    # Find the starting position of the dropdowns in the output file
-    output_col_start_index = selected_columns.index("T&O MT Review") + 1 
+    # The starting index of the lists in the dropdown sheet is Column A (Index 0)
+    DROPDOWN_SHEET_START_COL_INDEX = 0 
     
     for col_name, list_index in DROPDOWN_MAPPING.items():
         
         # 1. Determine the EXCEL column letter for the output file
-        # The index in the selected_columns list corresponds to the output column number
         output_col_index_in_list = selected_columns.index(col_name)
         excel_col_letter = chr(ord('A') + output_col_index_in_list) 
         
@@ -315,9 +314,12 @@ try:
         formula = '"{}"'.format(formula_content)
         
         # Define the range to apply the dropdown (from row 2 down to the last row)
+        range_string = f'{excel_col_letter}2:{excel_col_letter}{ws.max_row}'
+        
+        # THE FIX: Create DataValidation object and add the range using the 'add' method
         data_validation = DataValidation(type="list", formula1=formula, allow_blank=True)
+        data_validation.add(range_string) 
         ws.add_data_validation(data_validation)
-        data_validation.ranges.append(f'{excel_col_letter}2:{excel_col_letter}{ws.max_row}')
         
     # 8e: Save the final file, handling the overwriting avoidance
     base_filename = final_output_filename
@@ -336,4 +338,4 @@ try:
 
 except Exception as e:
     print(f"\nFATAL ERROR during Data Validation: {e}")
-    print("The final file was saved without dropdowns. Please ensure openpyxl is installed and your 'drop-down' sheet columns contain data.")
+    print("The final file was saved without dropdowns. Please ensure openpyxl is installed and your 'drop-down' sheet exists.")
