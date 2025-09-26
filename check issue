@@ -1,0 +1,41 @@
+# --- DIAGNOSTIC: Check for Duplicate Keys (Causing the ValueError) ---
+print("\n--- DIAGNOSTIC CHECK FOR DUPLICATES ---")
+
+# Check 1: Mapping File (Country and Business Function Lvl6 Name)
+if not df_mapping.empty:
+    # Normalize keys for accurate count
+    df_mapping['Country_Check'] = df_mapping['Country'].astype(str).str.strip().str.lower()
+    df_mapping['BF_L6_Check'] = df_mapping['Business Function Lvl6 Name'].astype(str).str.strip().str.lower()
+
+    # Calculate duplicates for 'Country'
+    total_rows = len(df_mapping)
+    unique_rows_country = len(df_mapping.drop_duplicates(subset=['Country_Check']))
+    print(f"'{mapping_filename}' - Country: {total_rows - unique_rows_country} duplicate keys found.")
+
+    # Calculate duplicates for 'Business Function Lvl6 Name'
+    unique_rows_bf = len(df_mapping.drop_duplicates(subset=['BF_L6_Check']))
+    print(f"'{mapping_filename}' - Business Function Lvl6 Name: {total_rows - unique_rows_bf} duplicate keys found.")
+    
+    # Clean up temporary check columns
+    df_mapping.drop(columns=['Country_Check', 'BF_L6_Check'], inplace=True)
+else:
+    print("Mapping file was not loaded, skipping checks.")
+
+
+# Check 2: Critical Sheet (Job Family)
+if not df_critical.empty:
+    # Normalize key for accurate count
+    df_critical['Job_Family_Check'] = df_critical['Job Family'].astype(str).str.strip().str.lower()
+
+    # Calculate duplicates for 'Job Family'
+    total_rows = len(df_critical)
+    unique_rows_jf = len(df_critical.drop_duplicates(subset=['Job_Family_Check']))
+    print(f"'{new_data_filename}' - Job Family: {total_rows - unique_rows_jf} duplicate keys found.")
+    
+    df_critical.drop(columns=['Job_Family_Check'], inplace=True)
+else:
+    print("Critical sheet was not loaded, skipping checks.")
+
+print("------------------------------------------")
+# Note: The script will crash on the next step because the error is still there,
+# but the printouts above will tell you where the problem is.
