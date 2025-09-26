@@ -12,13 +12,14 @@ from openpyxl.utils import get_column_letter
 tqdm.pandas(desc="Processing data")
 
 # --- Configuration for all files ---
-file_path = "input.xlsx"
-password = "your_password"
-new_data_filename = "ProjectID_clarity.xlsx"
-mapping_filename = "mapping.xlsx"
-final_output_filename = "final_report.xlsx"
+file_path = "input.xlsx"  # Your initial raw data file
+password = "your_password"   # Your Excel password
+new_data_filename = "ProjectID_clarity.xlsx" # The file with ProjectID_clarity/Critical sheets
+mapping_filename = "mapping.xlsx" # The new mapping file
+final_output_filename = "final_report.xlsx" # The name for your final output file
+HIDDEN_SHEET_NAME = '_DropdownLists' # Name of the hidden sheet for dropdown values
 
-# --- Load password-protected Excel (Steps 1, 2, 3) ---
+# --- Load password-protected Excel ---
 try:
     with open(file_path, "rb") as f:
         decrypted = io.BytesIO()
@@ -38,70 +39,113 @@ except Exception as e:
     print("Please check your file path and password.")
     exit()
 
-# --- Step 1 & 2: Filtering and Merging (Omitting function definitions for space) ---
+# --- Step 1: Filter rows first based on your specific criteria ---
 df["Status"] = df["Status"].fillna('').astype(str).str.strip().str.lower()
 df["Latest Approver Name"] = df["Latest Approver Name"].fillna('').astype(str).str.strip()
+
 df = df[(df["Status"] == "pending") & (df["Latest Approver Name"].str.contains("Aini Ayoub|Sybi", case=False, na=False))]
 
+print(f"\nAfter filtering, there are {len(df)} rows remaining.")
+print(f"After filtering, there are {df['Position Code'].nunique()} unique Position IDs.")
+
+
+# --- Step 2: Merge rows based on Position Code and extract IDs from merged comments ---
 def merge_and_extract(group):
     merged = group.iloc[0].copy()
     merged_comments = ";".join(group["Comments"].dropna().astype(str).unique())
     merged["Comments"] = merged_comments
+    
     cw_numbers = re.findall(r'[Cc][Ww]\d{6}|\b\d{6}\b', merged_comments)
     bank_ids = re.findall(r'\b\d{7}\b', merged_comments)
     project_ids = re.findall(r'\b[12]\d{7}\b', merged_comments)
+    
     merged["CW_Number"] = ";".join(pd.Series(cw_numbers).unique()) if cw_numbers else None
     merged["Bank_ID"] = ";".join(pd.Series(bank_ids).unique()) if bank_ids else None
     merged["Project_ID"] = ";".join(pd.Series(project_ids).unique()) if project_ids else None
+    
     return merged
+
 df_final = df.groupby("Position Code").progress_apply(merge_and_extract).reset_index(drop=True)
 
-# ... (Steps 3, 4, 5, 6 - Joins and Lookups) ...
+
+# --- Step 3: Load the new data files for all subsequent joins ---
 try:
     df_new_sheets = pd.read_excel(new_data_filename, sheet_name=None)
     df_project_clarity = df_new_sheets['ProjectID_clarity']
     df_critical = df_new_sheets['Critical']
     df_project_clarity.columns = df_project_clarity.columns.str.strip()
     df_critical.columns = df_critical.columns.str.strip()
+    print(f"\nSuccessfully loaded '{new_data_filename}' for joins.")
 except Exception as e:
     df_project_clarity = pd.DataFrame()
     df_critical = pd.DataFrame()
+
+# Load mapping.xlsx
 try:
     df_mapping = pd.read_excel(mapping_filename, sheet_name='mapping')
+    df_dropdown = pd.read_excel(mapping_filename, sheet_name='drop-down')
     df_mapping.columns = df_mapping.columns.str.strip()
+    print(f"Successfully loaded '{mapping_filename}' for lookups.")
 except Exception as e:
     df_mapping = pd.DataFrame()
-    
-# Placeholder logic for Joins (Needed to define final columns)
+    df_dropdown = pd.DataFrame()
+
+
+# --- Step 4: Cost & Domain Joins from 'mapping' sheet (WITH DUPLICATE RESOLUTION) ---
 if not df_mapping.empty:
+    
+    # NORMALIZE KEYS in Lookup Table
     df_mapping['Country'] = df_mapping['Country'].astype(str).str.strip().str.lower()
     df_mapping['Business Function Lvl6 Name'] = df_mapping['Business Function Lvl6 Name'].astype(str).str.strip().str.lower()
-    cost_df_unique = df_mapping.drop_duplicates(subset=['Country'], keep='first'); cost_map = cost_df_unique.set_index('Country')['high/low'].to_dict()
-    df_final['Country_Key'] = df_final['Country'].astype(str).str.strip().str.lower(); HIGH_COST_COUNTRIES = ['singapore', 'hong kong', 'united arab emirates', 'united states', 'united kingdom']
-    df_final['Cost'] = df_final['Country_Key'].apply(lambda x: 'high' if x in HIGH_COST_COUNTRIES else 'low'); df_final.drop(columns=['Country_Key'], inplace=True)
+    
+    # 4a: Cost Mapping (Country -> Cost)
+    HIGH_COST_COUNTRIES = ['singapore', 'hong kong', 'united arab emirates', 'united states', 'united kingdom']
+    df_final['Country_Key'] = df_final['Country'].astype(str).str.strip().str.lower()
+    df_final['Cost'] = df_final['Country_Key'].apply(lambda x: 'high' if x in HIGH_COST_COUNTRIES else 'low')
+    df_final.drop(columns=['Country_Key'], inplace=True)
+
+    # 4b: Domain Mapping (Business Function L6 -> MT Domain, MT-1 Domain, Cost Cat)
     domain_df_unique = df_mapping.drop_duplicates(subset=['Business Function Lvl6 Name'], keep='first')
     domain_map = domain_df_unique.set_index('Business Function Lvl6 Name')[['MT Domain', 'MT-1 Domain', 'Cost Cat']].to_dict('index')
+    
     df_final['Business Function L6_Key'] = df_final['Business Function L6'].astype(str).str.strip().str.lower()
     def domain_lookup(bf_l6): return domain_map.get(bf_l6, {'MT Domain': None, 'MT-1 Domain': None, 'Cost Cat': None})
     domain_results = df_final['Business Function L6_Key'].apply(domain_lookup)
     df_final['MT Domain'] = [r['MT Domain'] for r in domain_results]; df_final['MT-1 Domain'] = [r['MT-1 Domain'] for r in domain_results]
     df_final['Cost Category'] = [r['Cost Cat'] for r in domain_results]; df_final.drop(columns=['Business Function L6_Key'], inplace=True)
-else: df_final[['Cost', 'MT Domain', 'MT-1 Domain', 'Cost Category']] = None, None, None, None
+    print("✅ Joined 'MT Domain', 'MT-1 Domain', and 'Cost Category' data.")
+
+else:
+    df_final[['Cost', 'MT Domain', 'MT-1 Domain', 'Cost Category']] = None, None, None, None
+
+
+# --- Step 5: Join from the 'Critical' sheet based on Job family (WITH DUPLICATE RESOLUTION) ---
 if not df_critical.empty:
     df_critical['Job Family'] = df_critical['Job Family'].astype(str).str.strip().str.lower()
     critical_df_unique = df_critical.drop_duplicates(subset=['Job Family'], keep='first')
     critical_jf_map = critical_df_unique.set_index('Job Family')['Critical JF'].to_dict()
+
     df_final['Job Family_Key'] = df_final['Job Family'].astype(str).str.strip().str.lower()
     df_final['Critical JF'] = df_final['Job Family_Key'].apply(lambda x: critical_jf_map.get(x, 'Others'))
     df_final.drop(columns=['Job Family_Key'], inplace=True)
-else: df_final['Critical JF'] = 'Others'
+    print("✅ Joined 'Critical JF' data.")
+else:
+    df_final['Critical JF'] = 'Others'
+
+
+# --- Step 6: Join from the 'ProjectID_clarity' sheet based on Project ID (WITH ROBUST QPR FINDER) ---
 if not df_project_clarity.empty:
     df_project_clarity['Project ID'] = df_project_clarity['Project ID'].astype(str).str.strip()
     project_clarity_map = df_project_clarity.set_index('Project ID')
+
+    # FIX: Dynamically find the exact column name for Quarterly Performance Review(QPR) by searching for 'QPR'
     qpr_col = next((col for col in df_project_clarity.columns if 'QPR' in col.upper()), None)
     lifecycle_col = 'Lifecycle status' 
-    if qpr_col:
-        def lookup_and_join(project_ids_str): 
+    
+    if not qpr_col:
+        df_final[['Project Name', 'Lifecycle Status', 'Quarterly Performance Review(QPR)']] = None, None, None
+    else:
+        def lookup_and_join(project_ids_str):
             if pd.isna(project_ids_str) or not isinstance(project_ids_str, str): return None, None, None
             ids_list = [id.strip() for id in project_ids_str.split(';')]
             project_names, lifecycle_statuses, qpr_values = [], [], []
@@ -114,24 +158,20 @@ if not df_project_clarity.empty:
                     ";".join(pd.Series(qpr_values).dropna().unique()) if qpr_values else None)
         df_final[['Project Name', 'Lifecycle Status', 'Quarterly Performance Review(QPR)']] = df_final['Project_ID'].progress_apply(
             lambda x: pd.Series(lookup_and_join(x)))
-    else: df_final[['Project Name', 'Lifecycle Status', 'Quarterly Performance Review(QPR)']] = None, None, None
-else: df_final[['Project Name', 'Lifecycle Status', 'Quarterly Performance Review(QPR)']] = None, None, None
+        print("✅ Joined 'ProjectID_clarity' data.")
+else:
+    df_final[['Project Name', 'Lifecycle Status', 'Quarterly Performance Review(QPR)']] = None, None, None
 
 
 # --- Step 7: Add New Review/Dropdown Columns and Final Selection/Ordering ---
-
-# DEFINE THE 10 REVIEW COLUMNS
 REVIEW_COLUMNS = [
     "Spans (of direct reports)", "T&O MT Review", "HRBP Review", "Have you considered an Apprentice for this role?", 
     "Why not low Cost Location?", "Niche Skillset", "TA Confirmed Skillset not available in Hubs", 
     "If Reg Requirement pls state which Reg", "Critical Replacement on Fin Outlook", "3 month data volume trend"
 ]
-
-# ADD 10 EMPTY COLUMNS TO DF
 for col in REVIEW_COLUMNS:
     df_final[col] = None
 
-# DEFINE DROPDOWN MAPPING (Output Column Name -> Dropdown Sheet Column Index)
 DROPDOWN_MAPPING = {
     "T&O MT Review": 0, "HRBP Review": 1, "Have you considered an Apprentice for this role?": 2, 
     "Why not low Cost Location?": 3, "Niche Skillset": 4, "TA Confirmed Skillset not available in Hubs": 5, 
@@ -148,20 +188,10 @@ selected_columns = [
 
 df_final = df_final[selected_columns]
 df_final.sort_values(by=['MT Domain', 'MT-1 Domain', 'Cost Category'], inplace=True, na_position='last')
+print("✅ Final file sorted by MT Domain, MT-1 Domain, and Cost Category.")
 
 
 # --- Step 8: Save to new Excel, ADDING DROPDOWNS (ROBUST LINKED LISTS) ---
-
-HIDDEN_SHEET_NAME = '_DropdownLists'
-
-# 8a: Load Dropdown Values from mapping.xlsx
-try:
-    df_dropdown = pd.read_excel(mapping_filename, sheet_name='drop-down')
-except Exception as e:
-    # (Fallback Save - omitted for brevity)
-    exit()
-
-# 8b: Save DataFrame to a Temporary File
 temp_output_filename = "temp_output.xlsx"
 df_final.to_excel(temp_output_filename, index=False, engine='openpyxl')
 
@@ -173,22 +203,18 @@ try:
     
     # 1. Create the hidden sheet and write the lists
     ws_hidden = wb.create_sheet(HIDDEN_SHEET_NAME)
-    ws_hidden.sheet_state = 'hidden' # Hides the sheet from the user
+    ws_hidden.sheet_state = 'hidden'
     
-    # Write the dropdown data from the loaded DataFrame to the hidden sheet
     for list_index, col_name in DROPDOWN_MAPPING.items():
+        # Write the list data from the dropdown sheet to the hidden sheet
         list_data = df_dropdown.iloc[:, col_name].dropna().unique()
         
-        # Write each option down the column (starting at A1)
         for row_index, option in enumerate(list_data):
             ws_hidden.cell(row=row_index + 1, column=list_index + 1, value=str(option))
             
         # 2. Define the range for the dropdown rule (e.g., =_HiddenLists!$A$1:$A$10)
-        # Get the max row written for this list
         max_row = len(list_data)
         col_letter = get_column_letter(list_index + 1)
-        
-        # Create the formula to link to the hidden range
         formula_range = f'={HIDDEN_SHEET_NAME}!${col_letter}$1:${col_letter}${max_row}'
         
         # 3. Apply the Data Validation to the corresponding output column
@@ -213,7 +239,7 @@ try:
         counter += 1
         
     wb.save(final_save_filename)
-    os.remove(temp_output_filename) # Clean up temp file
+    os.remove(temp_output_filename) 
 
     print(f"\n🎉 All processing complete. The final report with robust dropdowns has been saved to '{final_save_filename}'.")
 
