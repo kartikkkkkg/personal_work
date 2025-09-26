@@ -1,0 +1,213 @@
+import pandas as pd
+import msoffcrypto
+import io
+import re
+import os
+from tqdm.autonotebook import tqdm
+
+# Register tqdm with pandas to show progress bars
+tqdm.pandas(desc="Processing data")
+
+# --- Configuration for all files ---
+file_path = "input.xlsx"  # Your initial raw data file
+password = "your_password"   # Your Excel password
+new_data_filename = "ProjectID_clarity.xlsx" # The file with ProjectID_clarity/Critical sheets
+mapping_filename = "mapping.xlsx" # The new mapping file
+final_output_filename = "final_report.xlsx" # The name for your final output file
+
+# --- Load password-protected Excel ---
+try:
+    with open(file_path, "rb") as f:
+        decrypted = io.BytesIO()
+        office_file = msoffcrypto.OfficeFile(f)
+        office_file.load_key(password=password)
+        office_file.decrypt(decrypted)
+        
+    df = pd.read_excel(decrypted)
+    df.columns = df.columns.str.strip()
+    print("Successfully read and cleaned column names for the Excel file!")
+
+except FileNotFoundError:
+    print(f"Error: The file '{file_path}' was not found.")
+    exit()
+except Exception as e:
+    print(f"An error occurred: {e}")
+    print("Please check your file path and password.")
+    exit()
+
+# --- Step 1: Filter rows first based on your specific criteria ---
+df["Status"] = df["Status"].fillna('').astype(str).str.strip().str.lower()
+df["Latest Approver Name"] = df["Latest Approver Name"].fillna('').astype(str).str.strip()
+
+df = df[(df["Status"] == "pending") & (df["Latest Approver Name"].str.contains("Aini Ayoub|Sybil Fitzgerald", case=False, na=False))]
+
+print(f"\nAfter filtering, there are {len(df)} rows remaining.")
+print(f"After filtering, there are {df['Position Code'].nunique()} unique Position IDs.")
+
+
+# --- Step 2: Merge rows based on Position Code and extract IDs from merged comments ---
+def merge_and_extract(group):
+    merged = group.iloc[0].copy()
+    merged_comments = ";".join(group["Comments"].dropna().astype(str).unique())
+    merged["Comments"] = merged_comments
+    
+    cw_numbers = re.findall(r'[Cc][Ww]\d{6}|\b\d{6}\b', merged_comments)
+    bank_ids = re.findall(r'\b\d{7}\b', merged_comments)
+    project_ids = re.findall(r'\b[12]\d{7}\b', merged_comments)
+    
+    merged["CW_Number"] = ";".join(pd.Series(cw_numbers).unique()) if cw_numbers else None
+    merged["Bank_ID"] = ";".join(pd.Series(bank_ids).unique()) if bank_ids else None
+    merged["Project_ID"] = ";".join(pd.Series(project_ids).unique()) if project_ids else None
+    
+    return merged
+
+df_final = df.groupby("Position Code").progress_apply(merge_and_extract).reset_index(drop=True)
+
+
+# --- Step 3: Load the new data files for all subsequent joins ---
+# Load ProjectID_clarity.xlsx
+try:
+    df_new_sheets = pd.read_excel(new_data_filename, sheet_name=None)
+    df_project_clarity = df_new_sheets['ProjectID_clarity']
+    df_critical = df_new_sheets['Critical']
+    df_project_clarity.columns = df_project_clarity.columns.str.strip()
+    df_critical.columns = df_critical.columns.str.strip()
+    print(f"Successfully loaded '{new_data_filename}' for joins.")
+except Exception as e:
+    print(f"Error loading '{new_data_filename}'. Skipping joins: {e}")
+    df_project_clarity = pd.DataFrame()
+    df_critical = pd.DataFrame()
+
+# Load mapping.xlsx
+try:
+    df_mapping = pd.read_excel(mapping_filename, sheet_name='mapping')
+    df_mapping.columns = df_mapping.columns.str.strip()
+    print(f"Successfully loaded '{mapping_filename}' for cost and domain joins.")
+except Exception as e:
+    print(f"Error loading '{mapping_filename}'. Skipping cost/domain joins: {e}")
+    df_mapping = pd.DataFrame()
+
+
+# --- Step 4: Cost & Domain Joins from 'mapping' sheet ---
+if not df_mapping.empty:
+    
+    # 4a: Cost Mapping (Country -> Cost)
+    # Create map where 'Country' in main file links to 'high/low' in mapping file
+    df_mapping['Country'] = df_mapping['Country'].astype(str).str.strip()
+    cost_map = df_mapping.set_index('Country')['high/low'].to_dict()
+    df_final['Country'] = df_final['Country'].astype(str).str.strip()
+    df_final['Cost'] = df_final['Country'].apply(lambda x: cost_map.get(x, None)) # Use None for no match
+    print("✅ Joined 'Cost' data based on 'Country'.")
+
+    # 4b: Domain Mapping (Business Function L6 -> MT Domain, MT-1 Domain, Cost Cat)
+    # Create map where 'Business Function L6' links to the domain columns
+    df_mapping['Business Function Lvl6 Name'] = df_mapping['Business Function Lvl6 Name'].astype(str).str.strip()
+    domain_map = df_mapping.set_index('Business Function Lvl6 Name')[['MT Domain', 'MT-1 Domain', 'Cost Cat']].to_dict('index')
+    
+    df_final['Business Function L6'] = df_final['Business Function L6'].astype(str).str.strip()
+    
+    def domain_lookup(bf_l6):
+        return domain_map.get(bf_l6, {'MT Domain': None, 'MT-1 Domain': None, 'Cost Cat': None})
+
+    domain_results = df_final['Business Function L6'].apply(domain_lookup)
+    df_final['MT Domain'] = [r['MT Domain'] for r in domain_results]
+    df_final['MT-1 Domain'] = [r['MT-1 Domain'] for r in domain_results]
+    df_final['Cost Category'] = [r['Cost Cat'] for r in domain_results]
+    print("✅ Joined 'MT Domain', 'MT-1 Domain', and 'Cost Category' data.")
+
+else:
+    print("⚠️ Skipping cost and domain joins as the mapping file was not found.")
+    df_final[['Cost', 'MT Domain', 'MT-1 Domain', 'Cost Category']] = None, None, None, None
+
+
+# --- Step 5: Join from the 'Critical' sheet based on Job family ---
+if not df_critical.empty:
+    df_critical['Job Family'] = df_critical['Job Family'].astype(str).str.strip()
+    critical_jf_map = df_critical.set_index('Job Family')['Critical JF'].to_dict()
+
+    df_final['Job Family'] = df_final['Job Family'].astype(str).str.strip()
+    df_final['Critical JF'] = df_final['Job Family'].apply(lambda x: critical_jf_map.get(x, 'Others'))
+    print("✅ Joined 'Critical JF' data.")
+else:
+    print("⚠️ Skipping 'Critical' sheet join.")
+    df_final['Critical JF'] = 'Others'
+
+
+# --- Step 6: Join from the 'ProjectID_clarity' sheet based on Project ID ---
+if not df_project_clarity.empty:
+    df_project_clarity['Project ID'] = df_project_clarity['Project ID'].astype(str).str.strip()
+    project_clarity_map = df_project_clarity.set_index('Project ID')
+
+    def lookup_and_join(project_ids_str):
+        # (Same function as before, simplified for space)
+        if pd.isna(project_ids_str) or not isinstance(project_ids_str, str):
+            return None, None, None
+        
+        ids_list = [id.strip() for id in project_ids_str.split(';')]
+        project_names, lifecycle_statuses, qpr_values = [], [], []
+        
+        for pid in ids_list:
+            if pid in project_clarity_map.index:
+                row = project_clarity_map.loc[pid]
+                project_names.append(row['Project Name'])
+                lifecycle_statuses.append(row['Lifecycle status'])
+                qpr_values.append(row['Quarterly Performance Review(QPR)'])
+        
+        return (
+            ";".join(pd.Series(project_names).dropna().unique()) if project_names else None,
+            ";".join(pd.Series(lifecycle_statuses).dropna().unique()) if lifecycle_statuses else None,
+            ";".join(pd.Series(qpr_values).dropna().unique()) if qpr_values else None
+        )
+
+    df_final[['Project Name', 'Lifecycle Status', 'Quarterly Performance Review(QPR)']] = df_final['Project_ID'].progress_apply(
+        lambda x: pd.Series(lookup_and_join(x))
+    )
+    print("✅ Joined 'ProjectID_clarity' data.")
+else:
+    print("⚠️ Skipping 'ProjectID_clarity' sheet join.")
+    df_final[['Project Name', 'Lifecycle Status', 'Quarterly Performance Review(QPR)']] = None, None, None
+
+
+# --- Step 7: Final Column Selection and Ordering ---
+# Columns are ordered to match the desired output structure (C, D, E insertion)
+selected_columns = [
+    "Bank ID of requestor", # Col A
+    "Business Function",    # Col B
+    "MT Domain",            # Col C (NEW)
+    "MT-1 Domain",          # Col D (NEW)
+    "Cost Category",        # Col E (NEW, Renamed from Cost Cat)
+    "Business Function L6", # Col F
+    "Position Code",
+    "Position Title",
+    "Job Family",
+    "Critical JF",
+    "Country",
+    "Location (Location Name)",
+    "Cost",                 # NEW (Inserted after Location)
+    "Employment Type",
+    "Global Grade",
+    "Comments",
+    "Reason for Hire",
+    "People Leader Position",
+    "CW_Number",
+    "Bank_ID",
+    "Project_ID",
+    "Project Name", 
+    "Lifecycle Status",
+    "Quarterly Performance Review(QPR)"
+]
+
+df_final = df_final[selected_columns]
+
+# --- Step 8: Save to new Excel, avoiding overwriting ---
+base_filename = final_output_filename
+counter = 1
+output_filename = base_filename
+
+while os.path.exists(output_filename):
+    name, ext = os.path.splitext(base_filename)
+    output_filename = f"{name}_{counter}{ext}"
+    counter += 1
+
+df_final.to_excel(output_filename, index=False)
+print(f"\n🎉 All processing complete. The final report has been saved to '{output_filename}'.")
