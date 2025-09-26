@@ -39,7 +39,6 @@ except Exception as e:
 df["Status"] = df["Status"].fillna('').astype(str).str.strip().str.lower()
 df["Latest Approver Name"] = df["Latest Approver Name"].fillna('').astype(str).str.strip()
 
-# FIX: Corrected approver filter
 df = df[(df["Status"] == "pending") & (df["Latest Approver Name"].str.contains("Aini Ayoub|Sybi", case=False, na=False))]
 
 print(f"\nAfter filtering, there are {len(df)} rows remaining.")
@@ -88,25 +87,24 @@ except Exception as e:
     df_mapping = pd.DataFrame()
 
 
-# --- Step 4: Cost & Domain Joins from 'mapping' sheet (FIXED FOR VALUEERROR) ---
+# --- Step 4: Cost & Domain Joins from 'mapping' sheet (WITH DUPLICATE RESOLUTION) ---
 if not df_mapping.empty:
     
     # NORMALIZE KEYS in Lookup Table
     df_mapping['Country'] = df_mapping['Country'].astype(str).str.strip().str.lower()
     df_mapping['Business Function Lvl6 Name'] = df_mapping['Business Function Lvl6 Name'].astype(str).str.strip().str.lower()
     
-    # 4a: Cost Mapping (Country -> Cost)
-    # FIX: Resolve duplicates in lookup table by keeping the first entry found
-    cost_df_unique = df_mapping.drop_duplicates(subset=['Country'], keep='first')
-    cost_map = cost_df_unique.set_index('Country')['high/low'].to_dict()
+    # 4a: Cost Mapping (Country -> Cost) - USING EXPLICIT LIST LOGIC
+    HIGH_COST_COUNTRIES = ['singapore', 'hong kong', 'united arab emirates', 'united states', 'united kingdom']
     
     df_final['Country_Key'] = df_final['Country'].astype(str).str.strip().str.lower()
-    df_final['Cost'] = df_final['Country_Key'].apply(lambda x: cost_map.get(x, None))
+    
+    # APPLY NEW COST LOGIC
+    df_final['Cost'] = df_final['Country_Key'].apply(lambda x: 'high' if x in HIGH_COST_COUNTRIES else 'low')
     df_final.drop(columns=['Country_Key'], inplace=True)
-    print("✅ Joined 'Cost' data based on 'Country'.")
+    print("✅ Joined 'Cost' data based on explicit country list.")
 
     # 4b: Domain Mapping (Business Function L6 -> MT Domain, MT-1 Domain, Cost Cat)
-    # FIX: Resolve duplicates in lookup table by keeping the first entry found
     domain_df_unique = df_mapping.drop_duplicates(subset=['Business Function Lvl6 Name'], keep='first')
     domain_map = domain_df_unique.set_index('Business Function Lvl6 Name')[['MT Domain', 'MT-1 Domain', 'Cost Cat']].to_dict('index')
     
@@ -127,11 +125,9 @@ else:
     df_final[['Cost', 'MT Domain', 'MT-1 Domain', 'Cost Category']] = None, None, None, None
 
 
-# --- Step 5: Join from the 'Critical' sheet based on Job family (FIXED FOR VALUEERROR) ---
+# --- Step 5: Join from the 'Critical' sheet based on Job family (WITH DUPLICATE RESOLUTION) ---
 if not df_critical.empty:
-    # NORMALIZE KEY in Lookup Table
     df_critical['Job Family'] = df_critical['Job Family'].astype(str).str.strip().str.lower()
-    # FIX: Resolve duplicates in lookup table by keeping the first entry found
     critical_df_unique = df_critical.drop_duplicates(subset=['Job Family'], keep='first')
     critical_jf_map = critical_df_unique.set_index('Job Family')['Critical JF'].to_dict()
 
@@ -140,19 +136,17 @@ if not df_critical.empty:
     df_final.drop(columns=['Job Family_Key'], inplace=True)
     print("✅ Joined 'Critical JF' data.")
 else:
-    print("⚠️ Skipping 'Critical' sheet join.")
     df_final['Critical JF'] = 'Others'
 
 
-# --- Step 6: Join from the 'ProjectID_clarity' sheet based on Project ID (FIXED FOR KEYERROR) ---
+# --- Step 6: Join from the 'ProjectID_clarity' sheet based on Project ID ---
 if not df_project_clarity.empty:
     df_project_clarity['Project ID'] = df_project_clarity['Project ID'].astype(str).str.strip()
     project_clarity_map = df_project_clarity.set_index('Project ID')
 
-    # FIX: Dynamically find the exact column name for Quarterly Performance Review(QPR) by searching for 'QPR'
+    # FIX: Dynamically find the exact column name for Quarterly Performance Review(QPR)
     qpr_col = next((col for col in df_project_clarity.columns if 'QPR' in col.upper()), None)
     
-    # We define Lifecycle Status here just to ensure we use the correct column name from the project clarity df
     lifecycle_col = 'Lifecycle status' 
     
     if not qpr_col:
@@ -171,7 +165,7 @@ if not df_project_clarity.empty:
                     row = project_clarity_map.loc[pid]
                     project_names.append(row['Project Name'])
                     lifecycle_statuses.append(row[lifecycle_col]) 
-                    qpr_values.append(row[qpr_col]) # Use the dynamically found column name
+                    qpr_values.append(row[qpr_col])
             
             return (
                 ";".join(pd.Series(project_names).dropna().unique()) if project_names else None,
@@ -188,7 +182,7 @@ else:
     df_final[['Project Name', 'Lifecycle Status', 'Quarterly Performance Review(QPR)']] = None, None, None
 
 
-# --- Step 7: Final Column Selection and Ordering ---
+# --- Step 7: Final Column Selection and Ordering and Sorting ---
 selected_columns = [
     "Bank ID of requestor", 
     "Business Function",
@@ -217,6 +211,15 @@ selected_columns = [
 ]
 
 df_final = df_final[selected_columns]
+
+# NEW: Sort the DataFrame as requested
+df_final.sort_values(
+    by=['MT Domain', 'MT-1 Domain', 'Cost Category'], 
+    inplace=True, 
+    na_position='last' # Puts rows with missing values at the end
+)
+print("✅ Final file sorted by MT Domain, MT-1 Domain, and Cost Category.")
+
 
 # --- Step 8: Save to new Excel, avoiding overwriting ---
 base_filename = final_output_filename
