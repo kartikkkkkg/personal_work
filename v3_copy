@@ -20,6 +20,9 @@ try:
     with open(file_path, "rb") as f:
         decrypted = io.BytesIO()
         office_file = msoffcrypto.OfficeFile(f)
+        file_password = password
+        file_password = file_password.encode('utf-8') if isinstance(file_password, str) else file_password
+        file.load_key(password=password)
         office_file.load_key(password=password)
         office_file.decrypt(decrypted)
         
@@ -34,16 +37,23 @@ except Exception as e:
     print(f"An error occurred: {e}")
     print("Please check your file path and password.")
     exit()
-
 # --- Step 1: Filter rows first based on your specific criteria ---
 df["Status"] = df["Status"].fillna('').astype(str).str.strip().str.lower()
 df["Latest Approver Name"] = df["Latest Approver Name"].fillna('').astype(str).str.strip()
 
-df = df[(df["Status"] == "pending") & (df["Latest Approver Name"].str.contains("Aini Ayoub|Sybi", case=False, na=False))]
+# New: Clean the Employment Type column before filtering
+df["Employment Type"] = df["Employment Type"].fillna('').astype(str).str.strip() 
+
+# APPLY ALL FILTERS: Status, Approver, AND Employment Type Exclusion
+df = df[
+    (df["Status"] == "pending") & 
+    (df["Latest Approver Name"].str.contains("Aini Ayoub|Sybi", case=False, na=False)) &
+    # NEW EXCLUSION: Exclude Managed Service/Outcome Workers
+    ~(df["Employment Type"].str.contains("Managed Service Worker|Managed Outcome Worker", case=False, na=False))
+]
 
 print(f"\nAfter filtering, there are {len(df)} rows remaining.")
 print(f"After filtering, there are {df['Position Code'].nunique()} unique Position IDs.")
-
 
 # --- Step 2: Merge rows based on Position Code and extract IDs from merged comments ---
 def merge_and_extract(group):
@@ -82,39 +92,43 @@ except Exception as e:
     df_mapping = pd.DataFrame()
 
 
-# --- Step 4: Cost & Domain Joins and CONDITIONAL COUNTRY OVERWRITE ---
+# --- Step 4: Cost & Domain Joins and CONDITIONAL COUNTRY OVERWRITE (FIXED COST) ---
 if not df_mapping.empty:
     
     # NORMALIZE KEYS in Lookup Table
     df_mapping['Country'] = df_mapping['Country'].astype(str).str.strip().str.lower()
     df_mapping['Business Function Lvl6 Name'] = df_mapping['Business Function Lvl6 Name'].astype(str).str.strip().str.lower()
     
-    # 4a: Initial Cost Mapping based on existing Country
+    # 4a: Initial Cost Mapping (Base on Current Country)
     HIGH_COST_COUNTRIES = ['singapore', 'hong kong', 'united arab emirates', 'united states', 'united kingdom']
     df_final['Country_Key'] = df_final['Country'].astype(str).str.strip().str.lower()
-    df_final['Location_Key'] = df_final['Location (Location Name)'].astype(str).str.strip() # Key for Location checks
+    df_final['Location_Key'] = df_final['Location (Location Name)'].astype(str).str.strip()
     
-    # --- APPLY CONDITIONAL COUNTRY OVERWRITE ---
-    is_singapore = df_final['Country_Key'] == 'singapore'
-    
-    # Rule 1: Guangzhou -> China
-    guangzhou_mask = is_singapore & df_final['Location_Key'].str.contains('guangzhou', case=False, na=False)
-    df_final.loc[guangzhou_mask, 'Country_Key'] = 'china'
-    
-    # Rule 2: Bangalore/Chennai -> India
-    india_mask = is_singapore & df_final['Location_Key'].str.contains('bangalore|chennai', case=False, na=False)
-    df_final.loc[india_mask, 'Country_Key'] = 'india'
-    
-    # Rule 3: Kuala Lumpur -> Malaysia
-    malaysia_mask = is_singapore & df_final['Location_Key'].str.contains('kuala lumpur', case=False, na=False)
-    df_final.loc[malaysia_mask, 'Country_Key'] = 'malaysia'
-    
-    # Overwrite the original Country column with the final, cleaned Key
-    df_final['Country'] = df_final['Country_Key'].str.title() # Convert back to Title Case for final output
+    # Calculate initial cost for ALL rows
     df_final['Cost'] = df_final['Country_Key'].apply(lambda x: 'high' if x in HIGH_COST_COUNTRIES else 'low')
     
+    # --- APPLY CONDITIONAL COUNTRY AND COST OVERWRITE ---
+    
+    # 1. Isolate the target rows
+    is_singapore = df_final['Country_Key'] == 'singapore'
+    
+    # Rule 1: Guangzhou -> China & set Cost to low
+    guangzhou_mask = is_singapore & df_final['Location_Key'].str.contains('guangzhou', case=False, na=False)
+    df_final.loc[guangzhou_mask, 'Country'] = 'China' 
+    df_final.loc[guangzhou_mask, 'Cost'] = 'low' # EXPLICIT OVERWRITE FIX
+    
+    # Rule 2: Bangalore/Chennai -> India & set Cost to low
+    india_mask = is_singapore & df_final['Location_Key'].str.contains('bangalore|chennai', case=False, na=False)
+    df_final.loc[india_mask, 'Country'] = 'India' 
+    df_final.loc[india_mask, 'Cost'] = 'low' # EXPLICIT OVERWRITE FIX
+    
+    # Rule 3: Kuala Lumpur -> Malaysia & set Cost to low
+    malaysia_mask = is_singapore & df_final['Location_Key'].str.contains('kuala lumpur', case=False, na=False)
+    df_final.loc[malaysia_mask, 'Country'] = 'Malaysia'
+    df_final.loc[malaysia_mask, 'Cost'] = 'low' # EXPLICIT OVERWRITE FIX
+    
+    # Clean up temporary columns
     df_final.drop(columns=['Country_Key', 'Location_Key'], inplace=True)
-    print("✅ Country values updated based on Location check (Guangzhou, Bangalore, Chennai, Kuala Lumpur).")
 
     # 4b: Domain Mapping (Business Function L6 -> MT Domain, MT-1 Domain, Cost Cat)
     domain_df_unique = df_mapping.drop_duplicates(subset=['Business Function Lvl6 Name'], keep='first')
