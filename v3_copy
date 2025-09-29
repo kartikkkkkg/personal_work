@@ -31,41 +31,28 @@ except Exception as e:
     print(f"Error: {e}. Please check file path, password, and dependencies.")
     exit()
 
-# --- Step 1: Filter rows first based on your specific criteria (FINAL ROBUST FILTER) ---
+# --- Step 1: Filter rows first based on your specific criteria ---
 df["Status"] = df["Status"].fillna('').astype(str).str.strip().str.lower()
 df["Latest Approver Name"] = df["Latest Approver Name"].fillna('').astype(str).str.strip()
+df["Employment Type"] = df["Employment Type"].fillna('').astype(str).str.strip() 
+df["Employment Type"] = df["Employment Type"].str.replace(r'\s+', ' ', regex=True).str.strip() # Final fix for Exclusion
 
-# FINAL Employment Type Fix: Remove non-standard spaces before filtering
-df["Employment Type_Clean"] = df["Employment Type"].astype(str).str.replace(r'[\xa0\s]+', ' ', regex=True).str.strip()
-
-# APPLY ALL FILTERS
 df = df[
     (df["Status"] == "pending") & 
     (df["Latest Approver Name"].str.contains("Aini Ayoub|Sybi", case=False, na=False)) &
-    # EXCLUSION: Now using the aggressively cleaned Employment Type column
-    ~(df["Employment Type_Clean"].str.contains("Managed Service Worker|Managed Outcome Worker", case=False, na=False))
+    ~(df["Employment Type"].str.contains("Managed Service Worker|Managed Outcome Worker", case=False, na=False, regex=True))
 ]
-df.drop(columns=['Employment Type_Clean'], inplace=True) # Drop the temporary column
 
 print(f"\nAfter filtering, there are {len(df)} rows remaining.")
 print(f"After filtering, there are {df['Position Code'].nunique()} unique Position IDs.")
 
 
-# --- Step 2: Create Keys and Merge rows based on Position Code ---
-
-# CREATE TEMPORARY KEY COLUMNS FOR SAFE MANIPULATION (BEFORE MERGING)
-df['Country_Key'] = df['Country'].astype(str).str.strip().str.lower()
-df['Location_Key'] = df['Location (Location Name)'].astype(str).str.strip().str.lower()
-
+# --- Step 2: Merge rows based on Position Code and extract IDs from merged comments ---
 def merge_and_extract(group):
-    # Ensure temporary keys are kept for Step 4
     merged = group.iloc[0].copy()
-    
-    # Core Comment Merge Logic
     merged_comments = ";".join(group["Comments"].dropna().astype(str).unique())
     merged["Comments"] = merged_comments
     
-    # ID Extraction Logic
     cw_numbers = re.findall(r'[Cc][Ww]\d{6}|\b\d{6}\b', merged_comments)
     bank_ids = re.findall(r'\b\d{7}\b', merged_comments)
     project_ids = re.findall(r'\b[12]\d{7}\b', merged_comments)
@@ -96,7 +83,7 @@ except Exception as e:
     df_mapping = pd.DataFrame()
 
 
-# --- Step 4: Cost & Domain Joins and CONDITIONAL COUNTRY OVERWRITE (FINAL ROBUST UPDATE) ---
+# --- Step 4: Cost & Domain Joins and CONDITIONAL COUNTRY OVERWRITE (ULTIMATE FIX) ---
 if not df_mapping.empty:
     
     # NORMALIZE KEYS in Lookup Table
@@ -106,31 +93,36 @@ if not df_mapping.empty:
     # 4a: Cost Mapping and CONDITIONAL COUNTRY OVERWRITE
     HIGH_COST_COUNTRIES = ['singapore', 'hong kong', 'united arab emirates', 'united states', 'united kingdom']
     
-    # Calculate initial cost for ALL rows based on the initial Country_Key
+    # CREATE TEMPORARY KEY COLUMNS WITH ULTIMATE CLEANING
+    # This removes all non-standard spaces/chars from Country and Location for comparison
+    df_final['Country_Key'] = df_final['Country'].astype(str).str.replace(r'[\xa0\s]+', ' ', regex=True).str.strip().str.lower()
+    df_final['Location_Key'] = df_final['Location (Location Name)'].astype(str).str.replace(r'[\xa0\s]+', ' ', regex=True).str.strip().str.lower()
+    
+    # Calculate initial cost for ALL rows
     df_final['Cost'] = df_final['Country_Key'].apply(lambda x: 'high' if x in HIGH_COST_COUNTRIES else 'low')
     
     # --- APPLY CONDITIONAL COUNTRY AND COST OVERWRITE (Guarantees Low Cost) ---
-    is_singapore = df_final['Country_Key'] == 'singapore'
+    is_singapore = df_final['Country_Key'] == 'singapore' # Should now find all Singapore entries
     
     # Rule 1: Guangzhou -> China & set Cost to low
-    guangzhou_mask = is_singapore & df_final['Location_Key'].str.contains('guangzhou', case=False, na=False)
+    guangzhou_mask = is_singapore & df_final['Location_Key'].str.contains('guangzhou', case=False, na=False, regex=False)
     df_final.loc[guangzhou_mask, 'Country'] = 'China' 
     df_final.loc[guangzhou_mask, 'Cost'] = 'low'
     
     # Rule 2: Bangalore/Chennai -> India & set Cost to low
-    india_mask = is_singapore & df_final['Location_Key'].str.contains('bangalore|chennai', case=False, na=False)
+    india_mask = is_singapore & df_final['Location_Key'].str.contains('bangalore|chennai', case=False, na=False, regex=True)
     df_final.loc[india_mask, 'Country'] = 'India' 
     df_final.loc[india_mask, 'Cost'] = 'low'
     
     # Rule 3: Kuala Lumpur -> Malaysia & set Cost to low
-    malaysia_mask = is_singapore & df_final['Location_Key'].str.contains('kuala lumpur', case=False, na=False)
+    malaysia_mask = is_singapore & df_final['Location_Key'].str.contains('kuala lumpur', case=False, na=False, regex=False)
     df_final.loc[malaysia_mask, 'Country'] = 'Malaysia'
     df_final.loc[malaysia_mask, 'Cost'] = 'low'
     
-    # Final cleanup: Ensure all Country names are Title Case
+    # Final cleanup: Ensure all remaining Country names are Title Case
     df_final['Country'] = df_final['Country'].str.title()
     
-    # Drop temporary columns (Country_Key and Location_Key were used in the merge/extract function)
+    # Clean up temporary columns
     df_final.drop(columns=['Country_Key', 'Location_Key'], inplace=True)
 
     # 4b: Domain Mapping (Business Function L6 -> MT Domain, MT-1 Domain, Cost Cat)
