@@ -35,14 +35,18 @@ except Exception as e:
     print("Please check your file path and password.")
     exit()
 
-# --- Step 1: Filter rows first based on your specific criteria ---
+# --- Step 1: Filter rows first based on your specific criteria (Final Fix for Exclusion) ---
 df["Status"] = df["Status"].fillna('').astype(str).str.strip().str.lower()
 df["Latest Approver Name"] = df["Latest Approver Name"].fillna('').astype(str).str.strip()
+
+# New: AGGRESSIVE CLEANING FOR EMPLOYMENT TYPE
 df["Employment Type"] = df["Employment Type"].fillna('').astype(str).str.strip() 
+df["Employment Type"] = df["Employment Type"].str.replace(r'\s+', ' ', regex=True).str.strip()
 
 df = df[
     (df["Status"] == "pending") & 
     (df["Latest Approver Name"].str.contains("Aini Ayoub|Sybi", case=False, na=False)) &
+    # EXCLUSION: Exclude Managed Service/Outcome Workers from the aggressively cleaned column
     ~(df["Employment Type"].str.contains("Managed Service Worker|Managed Outcome Worker", case=False, na=False))
 ]
 
@@ -74,6 +78,7 @@ try:
     df_new_sheets = pd.read_excel(new_data_filename, sheet_name=None)
     df_project_clarity = df_new_sheets['ProjectID_clarity']
     df_project_clarity.columns = df_project_clarity.columns.str.strip()
+    print(f"\nSuccessfully loaded '{new_data_filename}' for joins.")
 except Exception as e:
     df_project_clarity = pd.DataFrame()
 
@@ -81,7 +86,7 @@ except Exception as e:
 try:
     df_mapping = pd.read_excel(mapping_filename, sheet_name='mapping')
     df_mapping.columns = df_mapping.columns.str.strip()
-    print(f"\nSuccessfully loaded '{mapping_filename}' for cost and domain joins.")
+    print(f"Successfully loaded '{mapping_filename}' for cost and domain joins.")
 except Exception as e:
     df_mapping = pd.DataFrame()
 
@@ -95,10 +100,8 @@ if not df_mapping.empty:
     
     # 4a: Cost Mapping and CONDITIONAL COUNTRY OVERWRITE
     HIGH_COST_COUNTRIES = ['singapore', 'hong kong', 'united arab emirates', 'united states', 'united kingdom']
-    
-    # CREATE TEMPORARY KEY COLUMNS FOR SAFE MANIPULATION
     df_final['Country_Key'] = df_final['Country'].astype(str).str.strip().str.lower()
-    df_final['Location_Key'] = df_final['Location (Location Name)'].astype(str).str.strip().str.lower() # Added .str.lower() for extra robustness
+    df_final['Location_Key'] = df_final['Location (Location Name)'].astype(str).str.strip().str.lower()
     
     # Calculate initial cost for ALL rows
     df_final['Cost'] = df_final['Country_Key'].apply(lambda x: 'high' if x in HIGH_COST_COUNTRIES else 'low')
@@ -120,6 +123,9 @@ if not df_mapping.empty:
     malaysia_mask = is_singapore & df_final['Location_Key'].str.contains('kuala lumpur', case=False, na=False)
     df_final.loc[malaysia_mask, 'Country'] = 'Malaysia'
     df_final.loc[malaysia_mask, 'Cost'] = 'low'
+    
+    # Final cleanup: Ensure all remaining Country names are Title Case
+    df_final['Country'] = df_final['Country'].str.title()
     
     # Clean up temporary columns
     df_final.drop(columns=['Country_Key', 'Location_Key'], inplace=True)
