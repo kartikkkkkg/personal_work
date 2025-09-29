@@ -35,18 +35,14 @@ except Exception as e:
     print("Please check your file path and password.")
     exit()
 
-# --- Step 1: Filter rows first based on your specific criteria (Final Fix for Exclusion) ---
+# --- Step 1: Filter rows first based on your specific criteria ---
 df["Status"] = df["Status"].fillna('').astype(str).str.strip().str.lower()
 df["Latest Approver Name"] = df["Latest Approver Name"].fillna('').astype(str).str.strip()
-
-# New: AGGRESSIVE CLEANING FOR EMPLOYMENT TYPE
 df["Employment Type"] = df["Employment Type"].fillna('').astype(str).str.strip() 
-df["Employment Type"] = df["Employment Type"].str.replace(r'\s+', ' ', regex=True).str.strip()
 
 df = df[
     (df["Status"] == "pending") & 
     (df["Latest Approver Name"].str.contains("Aini Ayoub|Sybi", case=False, na=False)) &
-    # EXCLUSION: Exclude Managed Service/Outcome Workers from the aggressively cleaned column
     ~(df["Employment Type"].str.contains("Managed Service Worker|Managed Outcome Worker", case=False, na=False))
 ]
 
@@ -78,7 +74,6 @@ try:
     df_new_sheets = pd.read_excel(new_data_filename, sheet_name=None)
     df_project_clarity = df_new_sheets['ProjectID_clarity']
     df_project_clarity.columns = df_project_clarity.columns.str.strip()
-    print(f"\nSuccessfully loaded '{new_data_filename}' for joins.")
 except Exception as e:
     df_project_clarity = pd.DataFrame()
 
@@ -91,7 +86,7 @@ except Exception as e:
     df_mapping = pd.DataFrame()
 
 
-# --- Step 4: Cost & Domain Joins and CONDITIONAL COUNTRY OVERWRITE ---
+# --- Step 4: Cost & Domain Joins and CONDITIONAL COUNTRY OVERWRITE (FINAL FIX) ---
 if not df_mapping.empty:
     
     # NORMALIZE KEYS in Lookup Table
@@ -100,6 +95,8 @@ if not df_mapping.empty:
     
     # 4a: Cost Mapping and CONDITIONAL COUNTRY OVERWRITE
     HIGH_COST_COUNTRIES = ['singapore', 'hong kong', 'united arab emirates', 'united states', 'united kingdom']
+    
+    # CREATE TEMPORARY KEY COLUMNS (FINAL ROBUST CLEANING)
     df_final['Country_Key'] = df_final['Country'].astype(str).str.strip().str.lower()
     df_final['Location_Key'] = df_final['Location (Location Name)'].astype(str).str.strip().str.lower()
     
@@ -110,17 +107,17 @@ if not df_mapping.empty:
     is_singapore = df_final['Country_Key'] == 'singapore'
     
     # Rule 1: Guangzhou -> China & set Cost to low
-    guangzhou_mask = is_singapore & df_final['Location_Key'].str.contains('guangzhou', case=False, na=False)
+    guangzhou_mask = (is_singapore) & (df_final['Location_Key'].str.contains('guangzhou', case=False, na=False))
     df_final.loc[guangzhou_mask, 'Country'] = 'China' 
     df_final.loc[guangzhou_mask, 'Cost'] = 'low'
     
     # Rule 2: Bangalore/Chennai -> India & set Cost to low
-    india_mask = is_singapore & df_final['Location_Key'].str.contains('bangalore|chennai', case=False, na=False)
+    india_mask = (is_singapore) & (df_final['Location_Key'].str.contains('bangalore|chennai', case=False, na=False))
     df_final.loc[india_mask, 'Country'] = 'India' 
     df_final.loc[india_mask, 'Cost'] = 'low'
     
     # Rule 3: Kuala Lumpur -> Malaysia & set Cost to low
-    malaysia_mask = is_singapore & df_final['Location_Key'].str.contains('kuala lumpur', case=False, na=False)
+    malaysia_mask = (is_singapore) & (df_final['Location_Key'].str.contains('kuala lumpur', case=False, na=False))
     df_final.loc[malaysia_mask, 'Country'] = 'Malaysia'
     df_final.loc[malaysia_mask, 'Cost'] = 'low'
     
