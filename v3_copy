@@ -11,7 +11,7 @@ tqdm.pandas(desc="Processing data")
 # --- Configuration for all files ---
 file_path = "input.xlsx"  # Your initial raw data file
 password = "your_password"   # Your Excel password
-new_data_filename = "ProjectID_clarity.xlsx" # The file with ProjectID_clarity sheet
+new_data_filename = "ProjectID_clarity.xlsx" # The file with ProjectID_clarity/Critical sheets
 mapping_filename = "mapping.xlsx" # The new mapping file
 final_output_filename = "final_report.xlsx" # The name for your final output file
 
@@ -68,10 +68,14 @@ df_final = df.groupby("Position Code").progress_apply(merge_and_extract).reset_i
 try:
     df_new_sheets = pd.read_excel(new_data_filename, sheet_name=None)
     df_project_clarity = df_new_sheets['ProjectID_clarity']
+    df_critical = df_new_sheets['Critical'] # RESTORED
     df_project_clarity.columns = df_project_clarity.columns.str.strip()
+    df_critical.columns = df_critical.columns.str.strip() # RESTORED
     print(f"\nSuccessfully loaded '{new_data_filename}' for joins.")
 except Exception as e:
+    print(f"Error loading '{new_data_filename}'. Skipping joins: {e}")
     df_project_clarity = pd.DataFrame()
+    df_critical = pd.DataFrame() # RESTORED
 
 # Load mapping.xlsx
 try:
@@ -112,8 +116,18 @@ else:
     df_final[['Cost', 'MT Domain', 'MT-1 Domain', 'Cost Category']] = None, None, None, None
 
 
-# --- Step 5: (CRITICAL JF JOIN REMOVED) ---
-# Critical JF and Job Family logic removed as requested.
+# --- Step 5: Join from the 'Critical' sheet based on Job family (RESTORED LOGIC) ---
+if not df_critical.empty:
+    df_critical['Job Family'] = df_critical['Job Family'].astype(str).str.strip().str.lower()
+    critical_df_unique = df_critical.drop_duplicates(subset=['Job Family'], keep='first')
+    critical_jf_map = critical_df_unique.set_index('Job Family')['Critical JF'].to_dict()
+
+    df_final['Job Family_Key'] = df_final['Job Family'].astype(str).str.strip().str.lower()
+    df_final['Critical JF'] = df_final['Job Family_Key'].apply(lambda x: critical_jf_map.get(x, 'Others'))
+    df_final.drop(columns=['Job Family_Key'], inplace=True)
+    print("✅ Joined 'Critical JF' data.")
+else:
+    df_final['Critical JF'] = 'Others' # Still needed for column selection later
 
 
 # --- Step 6: Join from the 'ProjectID_clarity' sheet based on Project ID ---
@@ -148,7 +162,8 @@ else:
 # --- Step 7: Final Column Selection and Ordering and Sorting ---
 selected_columns = [
     "Bank ID of requestor", "Business Function", "MT Domain", "MT-1 Domain", "Cost Category", "Business Function L6",
-    "Position Code", "Position Title", "Country", "Location (Location Name)", "Cost",
+    "Position Code", "Position Title", 
+    "Country", "Location (Location Name)", "Cost",
     "Employment Type", "Global Grade", "Comments", "Reason for Hire", "People Leader Position", 
     "CW_Number", "Bank_ID", "Project_ID", "Project Name", "Lifecycle Status", "Quarterly Performance Review(QPR)"
 ]
