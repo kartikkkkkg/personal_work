@@ -1,0 +1,39 @@
+Initial Filtering (Criteria for Inclusion)
+
+Status Filter: Keeps only rows where the Status is "pending" (case-insensitive).
+
+Approver Filter: Keeps only rows approved by "Aini Ayoub" OR "Sybi" (case-insensitive).
+
+Exclusion Filter: Removes any row where the Employment Type contains "Managed Service Worker" OR "Managed Outcome Worker".
+
+2. Core Transformation (Merge & Extract)
+
+Grouping: The remaining data is grouped by Position Code.
+
+Comments Merge: All unique entries from the Comments column for each Position Code are merged into one cell, separated by a semicolon (;).
+
+ID Extraction: The merged comments are scanned to extract and separate all unique CW Numbers, Bank IDs, and Project IDs into their own columns.
+
+3. Country and Cost Data Integrity Fixes
+
+Initial Cost: The Cost is initially set to "high" or "low" based on membership in the HIGH_COST_COUNTRIES list.
+
+Overwrite Rule (China): If the original Country is Singapore AND the Location contains "Guangzhou" → Country is updated to China and Cost is set to "low".
+
+Overwrite Rule (India): If the original Country is Singapore AND the Location contains "Bangalore" OR "Chennai" → Country is updated to India and Cost is set to "low".
+
+Overwrite Rule (Malaysia): If the original Country is Singapore AND the Location contains "Kuala Lumpur" → Country is updated to Malaysia and Cost is set to "low".
+
+4. Data Enrichment (External Joins)
+
+Mapping Joins (Domain/Category): Joins with the mapping.xlsx sheet based on Business Function L6 to pull in MT Domain, MT-1 Domain, and Cost Category.
+
+Project Clarity Joins: Joins with the ProjectID_clarity.xlsx sheet based on Project ID (handling multiple IDs) to pull in Project Name, Lifecycle Status, and Quarterly Performance Review(QPR).
+
+5. Final Output and Formatting
+
+Column Selection: Selects and orders the final 22 columns (Original Data + Extracted IDs + Joined Data).
+
+Sorting: Sorts the entire final report primarily by MT Domain, then by MT-1 Domain, and finally by Cost Category.
+
+Saving: Saves the report to a new Excel file, avoiding overwrites (e.g., final_report_1.xlsx).
