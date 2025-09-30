@@ -1,0 +1,150 @@
+import pandas as pd
+import msoffcrypto
+import io
+import re
+import os
+from tqdm.autonotebook import tqdm
+
+tqdm.pandas(desc="Processing data")
+
+file_path = "input.xlsx"
+password = "your_password"
+new_data_filename = "ProjectID_clarity.xlsx"
+mapping_filename = "mapping.xlsx"
+final_output_filename = "final_report.xlsx"
+
+try:
+    with open(file_path, "rb") as f:
+        decrypted = io.BytesIO()
+        office_file = msoffcrypto.OfficeFile(f)
+        office_file.load_key(password=password)
+        office_file.decrypt(decrypted)
+    df = pd.read_excel(decrypted)
+    df.columns = df.columns.str.strip()
+    print("Successfully read and cleaned column names for the Excel file!")
+except Exception as e:
+    print(f"Error: {e}. Please check file path, password, and dependencies.")
+    exit()
+
+df["Status"] = df["Status"].fillna('').astype(str).str.strip().str.lower()
+df["Latest Approver Name"] = df["Latest Approver Name"].fillna('').astype(str).str.strip()
+df = df[
+    (df["Status"] == "pending") & 
+    (df["Latest Approver Name"].str.contains("Aini Ayoub|Sybi", case=False, na=False))
+]
+
+print(f"\nAfter filtering, there are {len(df)} rows remaining.")
+print(f"After filtering, there are {df['Position Code'].nunique()} unique Position IDs.")
+
+def merge_and_extract(group):
+    merged = group.iloc[0].copy()
+    merged_comments = ";".join(group["Comments"].dropna().astype(str).unique())
+    merged["Comments"] = merged_comments
+    cw_numbers = re.findall(r'[Cc][Ww]\d{6}|\b\d{6}\b', merged_comments)
+    bank_ids = re.findall(r'\b\d{7}\b', merged_comments)
+    project_ids = re.findall(r'\b[12]\d{7}\b', merged_comments)
+    merged["CW_Number"] = ";".join(pd.Series(cw_numbers).unique()) if cw_numbers else None
+    merged["Bank_ID"] = ";".join(pd.Series(bank_ids).unique()) if bank_ids else None
+    merged["Project_ID"] = ";".join(pd.Series(project_ids).unique()) if project_ids else None
+    return merged
+
+df_final = df.groupby("Position Code").progress_apply(merge_and_extract).reset_index(drop=True)
+
+try:
+    df_new_sheets = pd.read_excel(new_data_filename, sheet_name=None)
+    df_project_clarity = df_new_sheets['ProjectID_clarity']
+    df_project_clarity.columns = df_project_clarity.columns.str.strip()
+except Exception as e:
+    df_project_clarity = pd.DataFrame()
+
+try:
+    df_mapping = pd.read_excel(mapping_filename, sheet_name='mapping')
+    df_mapping.columns = df_mapping.columns.str.strip()
+    print(f"Successfully loaded '{mapping_filename}' for cost and domain joins.")
+except Exception as e:
+    df_mapping = pd.DataFrame()
+
+if not df_mapping.empty:
+    df_mapping['Country'] = df_mapping['Country'].astype(str).str.strip().str.lower()
+    df_mapping['Business Function Lvl6 Name'] = df_mapping['Business Function Lvl6 Name'].astype(str).str.strip().str.lower()
+    HIGH_COST_COUNTRIES = ['singapore', 'hong kong', 'united arab emirates', 'united states', 'united kingdom']
+    df_final['Country_Key'] = df_final['Country'].astype(str).str.strip().str.lower()
+    df_final['Location_Key'] = df_final['Location (Location Name)'].astype(str).str.strip().str.lower()
+    df_final['Cost'] = df_final['Country_Key'].apply(lambda x: 'high' if x in HIGH_COST_COUNTRIES else 'low')
+    is_singapore = df_final['Country_Key'] == 'singapore'
+    guangzhou_mask = is_singapore & df_final['Location_Key'].str.contains('guangzhou', case=False, na=False, regex=False)
+    df_final.loc[guangzhou_mask, 'Country'] = 'China' 
+    df_final.loc[guangzhou_mask, 'Cost'] = 'low'
+    india_mask = is_singapore & df_final['Location_Key'].str.contains('bangalore|chennai', case=False, na=False, regex=True)
+    df_final.loc[india_mask, 'Country'] = 'India' 
+    df_final.loc[india_mask, 'Cost'] = 'low'
+    malaysia_mask = is_singapore & df_final['Location_Key'].str.contains('kuala lumpur', case=False, na=False, regex=False)
+    df_final.loc[malaysia_mask, 'Country'] = 'Malaysia'
+    df_final.loc[malaysia_mask, 'Cost'] = 'low'
+    df_final['Country'] = df_final['Country'].str.title()
+    df_final.drop(columns=['Country_Key', 'Location_Key'], inplace=True)
+    domain_df_unique = df_mapping.drop_duplicates(subset=['Business Function Lvl6 Name'], keep='first')
+    domain_map = domain_df_unique.set_index('Business Function Lvl6 Name')[['MT Domain', 'MT-1 Domain', 'Cost Cat']].to_dict('index')
+    df_final['Business Function L6_Key'] = df_final['Business Function L6'].astype(str).str.strip().str.lower()
+    def domain_lookup(bf_l6): return domain_map.get(bf_l6, {'MT Domain': None, 'MT-1 Domain': None, 'Cost Cat': None})
+    domain_results = df_final['Business Function L6_Key'].apply(domain_lookup)
+    df_final['MT Domain'] = [r['MT Domain'] for r in domain_results]
+    df_final['MT-1 Domain'] = [r['MT-1 Domain'] for r in domain_results]
+    df_final['Cost Category'] = [r['Cost Cat'] for r in domain_results]
+    df_final.drop(columns=['Business Function L6_Key'], inplace=True)
+    print("✅ Joined 'MT Domain', 'MT-1 Domain', and 'Cost Category' data.")
+else:
+    df_final[['Cost', 'MT Domain', 'MT-1 Domain', 'Cost Category']] = None, None, None, None
+
+if not df_project_clarity.empty:
+    df_project_clarity['Project ID'] = df_project_clarity['Project ID'].astype(str).str.strip()
+    project_clarity_map = df_project_clarity.set_index('Project ID')
+    qpr_col = next((col for col in df_project_clarity.columns if 'QPR' in col.upper()), None)
+    lifecycle_col = 'Lifecycle status' 
+    if not qpr_col:
+        df_final[['Project Name', 'Lifecycle Status', 'Quarterly Performance Review(QPR)']] = None, None, None
+    else:
+        def lookup_and_join(project_ids_str):
+            if pd.isna(project_ids_str) or not isinstance(project_ids_str, str): return None, None, None
+            ids_list = [id.strip() for id in project_ids_str.split(';')]
+            project_names, lifecycle_statuses, qpr_values = [], [], []
+            for pid in ids_list:
+                if pid in project_clarity_map.index:
+                    row = project_clarity_map.loc[pid]
+                    project_names.append(row['Project Name']); lifecycle_statuses.append(row[lifecycle_col]); qpr_values.append(row[qpr_col])
+            return (";".join(pd.Series(project_names).dropna().unique()) if project_names else None,
+                    ";".join(pd.Series(lifecycle_statuses).dropna().unique()) if lifecycle_statuses else None,
+                    ";".join(pd.Series(qpr_values).dropna().unique()) if qpr_values else None)
+        df_final[['Project Name', 'Lifecycle Status', 'Quarterly Performance Review(QPR)']] = df_final['Project_ID'].progress_apply(
+            lambda x: pd.Series(lookup_and_join(x)))
+        print("✅ Joined 'ProjectID_clarity' data.")
+else:
+    df_final[['Project Name', 'Lifecycle Status', 'Quarterly Performance Review(QPR)']] = None, None, None
+
+selected_columns = [
+    "Bank ID of requestor", "Business Function", "MT Domain", "MT-1 Domain", "Cost Category", "Business Function L6",
+    "Position Code", "Position Title", "Country", "Location (Location Name)", "Cost",
+    "Employment Type", "Global Grade", "Comments", "Reason for Hire", "People Leader Position", 
+    "CW_Number", "Bank_ID", "Project_ID", "Project Name", "Lifecycle Status", "Quarterly Performance Review(QPR)"
+]
+
+df_final = df_final[selected_columns]
+
+df_final.sort_values(
+    by=['MT Domain', 'MT-1 Domain', 'Cost Category'], 
+    inplace=True, 
+    na_position='last'
+)
+print("✅ Final file sorted by MT Domain, MT-1 Domain, and Cost Category.")
+
+base_filename = final_output_filename
+counter = 1
+output_filename = base_filename
+
+while os.path.exists(output_filename):
+    name, ext = os.path.splitext(base_filename)
+    output_filename = f"{name}_{counter}{ext}"
+    counter += 1
+
+df_final.to_excel(output_filename, index=False)
+print(f"\n🎉 All processing complete. The final report has been saved to '{output_filename}'.")
