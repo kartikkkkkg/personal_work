@@ -35,14 +35,10 @@ except Exception as e:
 # --- Step 1: Filter rows first based on your specific criteria ---
 df["Status"] = df["Status"].fillna('').astype(str).str.strip().str.lower()
 df["Latest Approver Name"] = df["Latest Approver Name"].fillna('').astype(str).str.strip()
-df["Employment Type"] = df["Employment Type"].fillna('').astype(str).str.strip() 
-df["Employment Type"] = df["Employment Type"].str.replace(r'\s+', ' ', regex=True).str.strip() 
 
 df = df[
     (df["Status"] == "pending") & 
-    (df["Latest Approver Name"].str.contains("Aini Ayoub|Sybi", case=False, na=False)) &
-    ~(df["Employment Type"].str.contains("Managed Service Worker|Managed Outcome Worker", case=False, na=False, regex=True))
-]
+    (df["Latest Approver Name"].str.contains("Aini Ayoub|Sybi", case=False, na=False)) ]
 
 print(f"\nAfter filtering, there are {len(df)} rows remaining.")
 print(f"After filtering, there are {df['Position Code'].nunique()} unique Position IDs.")
