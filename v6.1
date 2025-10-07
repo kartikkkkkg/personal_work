@@ -1,4 +1,5 @@
 import pandas as pd
+import msoffcrypto
 import io
 import re
 import os
@@ -6,6 +7,7 @@ from tqdm.autonotebook import tqdm
 
 tqdm.pandas(desc="Processing data")
 
+# --- Configuration for all files ---
 RAW_DATA_FOLDER = "../Raw Data/"
 OUTPUT_FOLDER = "../Output Reports/"
 file_path = RAW_DATA_FOLDER + "input.xlsx"
@@ -14,16 +16,26 @@ new_data_filename = RAW_DATA_FOLDER + "ProjectID_clarity.xlsx"
 mapping_filename = RAW_DATA_FOLDER + "mapping.xlsx"
 final_output_base_filename = "final_report.xlsx"
 
+# --- Load password-protected Excel ---
 try:
-    df = pd.read_excel(file_path)
+    with open(file_path, "rb") as f:
+        decrypted = io.BytesIO()
+        office_file = msoffcrypto.OfficeFile(f)
+        office_file.load_key(password=password)
+        office_file.decrypt(decrypted)
+        
+    df = pd.read_excel(decrypted)
     df.columns = df.columns.str.strip()
     print("Successfully read and cleaned column names for the Excel file!")
+
 except Exception as e:
-    print(f"Error: {e}. If the file is password-protected, use msoffcrypto and decrypt before calling pd.read_excel.")
+    print(f"Error: {e}. Please check file path, password, and dependencies.")
     df = pd.DataFrame() 
     print("Skipping further execution due to file error.")
 
+
 if not df.empty:
+    # --- Step 1: Filter rows first based on your specific criteria ---
     df["Status"] = df["Status"].fillna('').astype(str).str.strip().str.lower()
     df["Latest Approver Name"] = df["Latest Approver Name"].fillna('').astype(str).str.strip()
 
@@ -34,6 +46,8 @@ if not df.empty:
     print(f"\nAfter filtering, there are {len(df)} rows remaining.")
     print(f"After filtering, there are {df['Position Code'].nunique()} unique Position IDs.")
 
+
+    # --- Step 2: Merge rows based on Position Code and extract IDs from merged comments ---
     def merge_and_extract(group):
         merged = group.iloc[0].copy()
         merged_comments = ";".join(group["Comments"].dropna().astype(str).unique())
@@ -54,6 +68,7 @@ if not df.empty:
     else:
         df_final = pd.DataFrame(columns=df.columns.tolist() + ['CW_Number', 'Bank_ID', 'Project_ID'])
 
+    # --- Step 3: Load the new data files for all subsequent joins ---
     try:
         df_new_sheets = pd.read_excel(new_data_filename, sheet_name=None)
         df_project_clarity = df_new_sheets['ProjectID_clarity']
@@ -62,6 +77,7 @@ if not df.empty:
     except Exception as e:
         df_project_clarity = pd.DataFrame()
 
+    # Load mapping.xlsx
     try:
         df_mapping = pd.read_excel(mapping_filename, sheet_name='mapping')
         df_mapping.columns = df_mapping.columns.str.strip()
@@ -69,6 +85,8 @@ if not df.empty:
     except Exception as e:
         df_mapping = pd.DataFrame()
 
+
+    # --- Step 4: Cost & Domain Joins and CONDITIONAL COUNTRY OVERWRITE ---
     if not df_mapping.empty and not df_final.empty:
         
         df_mapping['Country'] = df_mapping['Country'].astype(str).str.strip().str.lower()
@@ -83,6 +101,7 @@ if not df.empty:
         
         is_singapore = df_final['Country_Key'] == 'singapore'
         
+        # ADDED 'tianjin' to the China overwrite
         guangzhou_tianjin_mask = is_singapore & df_final['Location_Key'].str.contains('guangzhou|tianjin', case=False, na=False, regex=True)
         df_final.loc[guangzhou_tianjin_mask, 'Country'] = 'China' 
         df_final.loc[guangzhou_tianjin_mask, 'Cost'] = 'low'
@@ -99,6 +118,7 @@ if not df.empty:
         
         df_final.drop(columns=['Country_Key', 'Location_Key'], inplace=True)
 
+        # RENAMED cost values
         df_final['Cost'].replace({'high': 'H', 'low': 'L'}, inplace=True)
         
         domain_df_unique = df_mapping.drop_duplicates(subset=['Business Function Lvl6 Name'], keep='first')
@@ -113,8 +133,10 @@ if not df.empty:
         df_final.drop(columns=['Business Function L6_Key'], inplace=True)
         print("✅ Joined 'MT Domain', 'MT-1 Domain', and 'Cost Category' data.")
 
+        # CLEANED MT Domain in mapping file for better joining (to fix blank column issue)
         df_mapping['MT Domain'] = df_mapping['MT Domain'].astype(str).str.strip()
         
+        # ADDED Financial Outlook mapping
         try:
             outlook_map = df_mapping.drop_duplicates(subset=['MT Domain'], keep='first').set_index('MT Domain')['Financial Outlook'].to_dict()
             df_final['Financial outlook'] = df_final['MT Domain'].map(outlook_map)
@@ -126,6 +148,7 @@ if not df.empty:
     else:
         df_final[['Cost', 'MT Domain', 'MT-1 Domain', 'Cost Category', 'Financial outlook']] = None, None, None, None, None
 
+    # --- Step 6: Join from the 'ProjectID_clarity' sheet based on Project ID ---
     if not df_project_clarity.empty and not df_final.empty:
         df_project_clarity['Project ID'] = df_project_clarity['Project ID'].astype(str).str.strip()
         project_clarity_map = df_project_clarity.set_index('Project ID')
@@ -153,13 +176,14 @@ if not df.empty:
     else:
         df_final[['Project Name', 'Lifecycle Status', 'Quarterly Performance Review(QPR)']] = None, None, None
 
+    # --- Step 7: Final Column Selection and Ordering and Sorting ---
     if not df_final.empty:
         selected_columns = [
             "Bank ID of requestor", "Business Function", "MT Domain", "MT-1 Domain", "Cost Category", "Business Function L6",
             "Position Code", "Position Title", "Country", "Location (Location Name)", "Cost",
             "Employment Type", "Global Grade", "Comments", "Reason for Hire", "People Leader Position", 
             "CW_Number", "Bank_ID", "Project_ID", "Project Name", "Lifecycle Status", "Quarterly Performance Review(QPR)",
-            "Financial outlook"
+            "Financial outlook" # ADDED
         ]
         
         final_cols_present = [col for col in selected_columns if col in df_final.columns]
@@ -167,12 +191,13 @@ if not df.empty:
         df_final = df_final[final_cols_present]
 
         df_final.sort_values(
-            by=['MT Domain', 'MT-1 Domain', 'Cost Category', 'Financial outlook'], 
+            by=['MT Domain', 'MT-1 Domain', 'Cost Category', 'Financial outlook'], # ADDED sorting by Financial outlook
             inplace=True, 
             na_position='last'
         )
         print("✅ Final file sorted by MT Domain, MT-1 Domain, Cost Category, and Financial outlook.")
 
+        # --- Step 8: Save to new Excel, avoiding overwriting ---
         base_filename = final_output_base_filename
         counter = 1
         output_filename = os.path.join(OUTPUT_FOLDER, base_filename)
