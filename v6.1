@@ -121,6 +121,7 @@ if not df.empty:
         # RENAMED cost values
         df_final['Cost'].replace({'high': 'H', 'low': 'L'}, inplace=True)
         
+        # --- MT Domain and Cost Cat Joins (using Business Function L6) ---
         domain_df_unique = df_mapping.drop_duplicates(subset=['Business Function Lvl6 Name'], keep='first')
         domain_map = domain_df_unique.set_index('Business Function Lvl6 Name')[['MT Domain', 'MT-1 Domain', 'Cost Cat']].to_dict('index')
         
@@ -131,18 +132,32 @@ if not df.empty:
         df_final['MT-1 Domain'] = [r['MT-1 Domain'] for r in domain_results]
         df_final['Cost Category'] = [r['Cost Cat'] for r in domain_results]
         df_final.drop(columns=['Business Function L6_Key'], inplace=True)
-        print("✅ Joined 'MT Domain', 'MT-1 Domain', and 'Cost Category' data.")
+        print("✅ Joined 'MT Domain', 'MT-1 Domain', and 'Cost Category' data (from BFL6).")
 
-        # CLEANED MT Domain in mapping file for better joining (to fix blank column issue)
-        df_mapping['MT Domain'] = df_mapping['MT Domain'].astype(str).str.strip()
+        # --- Financial Outlook Mapping (using the separate MT Domain column Q) ---
         
-        # ADDED Financial Outlook mapping
+        # 1. Determine the column name for the second MT Domain (Column Q = Index 16)
         try:
-            outlook_map = df_mapping.drop_duplicates(subset=['MT Domain'], keep='first').set_index('MT Domain')['Financial Outlook'].to_dict()
-            df_final['Financial outlook'] = df_final['MT Domain'].map(outlook_map)
-            print("✅ Joined 'Financial outlook' data based on 'MT Domain' from 'Financial Outlook' column in mapping file.")
-        except KeyError:
-            print("⚠️ ERROR: The 'Financial Outlook' column was not found in the mapping file as a header. Setting 'Financial outlook' to None.")
+            if len(df_mapping.columns) > 16:
+                mt_domain_q_col_name = df_mapping.columns[16]
+            else:
+                raise IndexError(f"Mapping file has fewer than 17 columns (Q). Found only {len(df_mapping.columns)}.")
+            
+            # 2. Clean both the lookup key (MT Domain from Q) and the join key (MT Domain in df_final)
+            df_mapping[mt_domain_q_col_name] = df_mapping[mt_domain_q_col_name].astype(str).str.strip()
+            df_final['MT Domain (Q_Key)'] = df_final['MT Domain'].astype(str).str.strip() # Use a temporary key based on the existing MT Domain in df_final
+            
+            # 3. Create the outlook map using the specific MT Domain (Q) as the key
+            outlook_map = df_mapping.drop_duplicates(subset=[mt_domain_q_col_name], keep='first').set_index(mt_domain_q_col_name)['Financial Outlook'].to_dict()
+            
+            # 4. Map the data
+            df_final['Financial outlook'] = df_final['MT Domain (Q_Key)'].map(outlook_map)
+            df_final.drop(columns=['MT Domain (Q_Key)'], inplace=True)
+            print(f"✅ Joined 'Financial outlook' data using MT Domain column '{mt_domain_q_col_name}' (Q) as the key.")
+            
+        except (KeyError, IndexError) as e:
+            # Fallback if column Q is not found or the 'Financial Outlook' column is missing
+            print(f"⚠️ ERROR: Could not map Financial Outlook. Reason: {e}. Setting 'Financial outlook' to None.")
             df_final['Financial outlook'] = None
 
     else:
@@ -183,7 +198,7 @@ if not df.empty:
             "Position Code", "Position Title", "Country", "Location (Location Name)", "Cost",
             "Employment Type", "Global Grade", "Comments", "Reason for Hire", "People Leader Position", 
             "CW_Number", "Bank_ID", "Project_ID", "Project Name", "Lifecycle Status", "Quarterly Performance Review(QPR)",
-            "Financial outlook" # ADDED
+            "Financial outlook"
         ]
         
         final_cols_present = [col for col in selected_columns if col in df_final.columns]
@@ -191,7 +206,7 @@ if not df.empty:
         df_final = df_final[final_cols_present]
 
         df_final.sort_values(
-            by=['MT Domain', 'MT-1 Domain', 'Cost Category', 'Financial outlook'], # ADDED sorting by Financial outlook
+            by=['MT Domain', 'MT-1 Domain', 'Cost Category', 'Financial outlook'], 
             inplace=True, 
             na_position='last'
         )
