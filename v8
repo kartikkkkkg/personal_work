@@ -156,20 +156,24 @@ if not df.empty:
             print(f"⚠️ ERROR: Could not map Financial Outlook. Reason: {e}. Setting 'Financial outlook' to None.")
             df_final['Financial outlook'] = None
 
-    # --- Step 5: Roll Up Name Join (NEW STEP) ---
+    # --- Step 5: Roll Up Name Join (FIXED) ---
     if not df_mapping.empty and not df_final.empty:
         try:
+            # The key column name in both files is 'Bank ID of requestor'
+            KEY_COL = 'Bank ID of requestor'
+            # The value column name in the mapping file is 'Roll UP Name'
+            VALUE_COL = 'Roll UP Name' 
+
             # Clean the join keys in both DataFrames
-            df_mapping['Bank ID of requestor'] = df_mapping['Bank ID of requestor'].astype(str).str.strip()
-            df_final['Bank ID of requestor'] = df_final['Bank ID of requestor'].astype(str).str.strip()
+            df_mapping[KEY_COL] = df_mapping[KEY_COL].astype(str).str.strip()
+            df_final[KEY_COL] = df_final[KEY_COL].astype(str).str.strip()
             
-            # Create the Roll Up map: Key is 'Bank ID of requestor', Value is 'ROLL UP'
-            # FIX: Using 'Bank ID of requestor' and 'ROLL UP' as per the user's latest clarification
-            rollup_map = df_mapping.drop_duplicates(subset=['Bank ID of requestor'], keep='first').set_index('Bank ID of requestor')['ROLL UP'].to_dict()
+            # Create the Roll Up map: Key is 'Bank ID of requestor', Value is 'Roll UP Name'
+            rollup_map = df_mapping.drop_duplicates(subset=[KEY_COL], keep='first').set_index(KEY_COL)[VALUE_COL].to_dict()
             
-            # Map the data to the new column
-            df_final['ROLL UP'] = df_final['Bank ID of requestor'].map(rollup_map)
-            print("✅ Joined 'ROLL UP' data based on 'Bank ID of requestor'.")
+            # Map the data to the new column 'ROLL UP'
+            df_final['ROLL UP'] = df_final[KEY_COL].map(rollup_map)
+            print(f"✅ Joined 'ROLL UP' data from '{VALUE_COL}' based on '{KEY_COL}'.")
 
         except KeyError as e:
             print(f"⚠️ ERROR: Could not map ROLL UP. Missing required column {e} in mapping file. Setting 'ROLL UP' to None.")
@@ -214,7 +218,7 @@ if not df.empty:
             "Employment Type", "Global Grade", "Comments", "Reason for Hire", "People Leader Position", 
             "CW_Number", "Bank_ID", "Project_ID", "Project Name", "Lifecycle Status", "Quarterly Performance Review(QPR)",
             "Financial outlook",
-            "ROLL UP" # ADDED new column
+            "ROLL UP"
         ]
         
         final_cols_present = [col for col in selected_columns if col in df_final.columns]
