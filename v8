@@ -136,22 +136,18 @@ if not df.empty:
 
         # --- Financial Outlook Mapping (using the separate MT Domain column Q) ---
         
-        # 1. Determine the column name for the second MT Domain (Column Q = Index 16)
         try:
             if len(df_mapping.columns) > 16:
                 mt_domain_q_col_name = df_mapping.columns[16]
             else:
-                # If 'MT Domain' column from BFL6 is the key, this is a fallback
                 mt_domain_q_col_name = 'MT Domain' 
 
-            # 2. Clean both the lookup key (MT Domain from Q) and the join key (MT Domain in df_final)
+            # Clean the lookup key and the join key
             df_mapping[mt_domain_q_col_name] = df_mapping[mt_domain_q_col_name].astype(str).str.strip()
             df_final['MT Domain (Q_Key)'] = df_final['MT Domain'].astype(str).str.strip() 
             
-            # 3. Create the outlook map using the specific MT Domain (Q) as the key
             outlook_map = df_mapping.drop_duplicates(subset=[mt_domain_q_col_name], keep='first').set_index(mt_domain_q_col_name)['Financial Outlook'].to_dict()
             
-            # 4. Map the data
             df_final['Financial outlook'] = df_final['MT Domain (Q_Key)'].map(outlook_map)
             df_final.drop(columns=['MT Domain (Q_Key)'], inplace=True)
             print(f"✅ Joined 'Financial outlook' data using MT Domain column '{mt_domain_q_col_name}' (Q) as the key.")
@@ -163,14 +159,15 @@ if not df.empty:
     # --- Step 5: Roll Up Name Join (NEW STEP) ---
     if not df_mapping.empty and not df_final.empty:
         try:
-            # 1. Clean the join key columns
-            df_mapping['BANK ID OF REQUESTER'] = df_mapping['BANK ID OF REQUESTER'].astype(str).str.strip()
+            # Clean the join keys in both DataFrames
+            df_mapping['Bank ID of requestor'] = df_mapping['Bank ID of requestor'].astype(str).str.strip()
             df_final['Bank ID of requestor'] = df_final['Bank ID of requestor'].astype(str).str.strip()
             
-            # 2. Create the Roll Up map
-            rollup_map = df_mapping.drop_duplicates(subset=['BANK ID OF REQUESTER'], keep='first').set_index('BANK ID OF REQUESTER')['ROLL UP NAME'].to_dict()
+            # Create the Roll Up map: Key is 'Bank ID of requestor', Value is 'ROLL UP'
+            # FIX: Using 'Bank ID of requestor' and 'ROLL UP' as per the user's latest clarification
+            rollup_map = df_mapping.drop_duplicates(subset=['Bank ID of requestor'], keep='first').set_index('Bank ID of requestor')['ROLL UP'].to_dict()
             
-            # 3. Map the data to the new column
+            # Map the data to the new column
             df_final['ROLL UP'] = df_final['Bank ID of requestor'].map(rollup_map)
             print("✅ Joined 'ROLL UP' data based on 'Bank ID of requestor'.")
 
