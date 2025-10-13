@@ -1,0 +1,17 @@
+graph TD
+    A[Start: Load Script] --> B(Load password-protected **input.xlsx**);
+    B --> C[Data Cleaning: Clean 'Status' and 'Latest Approver Name' columns];
+    C --> D[Data Filtering: Keep only 'pending' requests for **Aini Ayoub** or **Sybi**];
+    D --> E[Data Aggregation: Group and Merge rows by **Position Code**];
+    E --> F[ID Extraction: Extract **CW_Number**, **Bank_ID**, and **Project_ID** from merged 'Comments'];
+    F --> G(Load **ProjectID_clarity.xlsx** and **mapping.xlsx**);
+    G --> H[Cost Calculation: Assign **Cost** ('H' or 'L') based on Country];
+    H --> I[Location Correction: Overwrite Country/Cost based on specific Location names (e.g., Singapore -> China)];
+    I --> J[Domain Join: Join **MT Domain**, **MT-1 Domain**, and **Cost Category** using 'Business Function L6' (from mapping.xlsx)];
+    J --> K[Outlook Join: Join **Financial outlook** using 'MT Domain' (from mapping.xlsx)];
+    K --> L[Roll Up Join: Join **ROLL UP** using 'Bank ID of requestor' (from mapping.xlsx)];
+    L --> M[Project Clarity Join: Join **Project Name**, **Lifecycle Status**, and **QPR** using extracted **Project_ID** (from ProjectID_clarity.xlsx)];
+    M --> N[Final Selection: Select and Order final columns for the report];
+    N --> O[Sorting: Sort report by **MT Domain, MT-1 Domain, Cost Category, Financial outlook**];
+    O --> P[Output: Save final report to a uniquely named **final_report_X.xlsx**];
+    P --> Z(End);
