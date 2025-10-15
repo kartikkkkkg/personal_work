@@ -1,0 +1,3 @@
+substring(triggerBody()?['Body'], add(indexOf(triggerBody()?['Body'], "Consultant("), 12), 8)
+
+uri(split(split(triggerBody()?['Body'], "href=")[1], '"')[0])
