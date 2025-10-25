@@ -1,5 +1,4 @@
-first(match(string(outputs('EmailBody')), '(?<=Position\s+Title:\s*.*?\()\d{8}'))
+if(empty(first(match(string(outputs('EmailBody')), '(?<=Position\s+Title:\s*.*?\()\d{8}'))), '', first(match(string(outputs('EmailBody')), '(?<=Position\s+Title:\s*.*?\()\d{8}')))
 
-first(match(string(outputs('EmailBody')), '(?i)(?<=Please\s+click\s+<a\s+href=")([^"]+)(?="\>here)'))
 
-json(concat('{ "PositionCode": "', variables('PositionCode'), '", "ApprovalLink": "', variables('ApprovalLink'), '"}'))
+if(empty(first(match(string(outputs('EmailBody')), '(?i)(?<=Please\s+click\s+<a\s+href=")([^"]+)(?="\>here)'))), '', first(match(string(outputs('EmailBody')), '(?i)(?<=Please\s+click\s+<a\s+href=")([^"]+)(?="\>here)')))
