@@ -1,9 +1,4 @@
-Position Code Expression (For Variable: PositionCode)
+first(match(string(outputs('EmailBody')), '(?i)(?<=Please\s+click\s+<a\s+href=")([^"]+)(?="\>here)'))
 
-Code snippet
-first(match(string(outputs('EmailBody')), '(?<=Position\s+Title:\s*.*?\()\d{8}'))
-2. Link Expression (For Variable: ApprovalLink)
 
-Code snippet
-first(match(string(outputs('EmailBody')), '(?i)(?<=Please\s+click\s+<a\s+href=")([^"]+)(?=">here)'))
-Update your flow with these two, save it, and run another test. This should resolve the zero output issue.
+first(match(string(outputs('EmailBody')), '(?<=Position\s+Title:.*?)\((\d{8})\)'))
