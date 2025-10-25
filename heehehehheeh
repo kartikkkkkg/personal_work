@@ -2,3 +2,6 @@ first(match(string(outputs('EmailBody')), '(?i)(?<=Please\s+click\s+<a\s+href=")
 
 
 first(match(string(outputs('EmailBody')), '(?<=Position\s+Title:.*?)\((\d{8})\)'))
+
+
+json(concat('{ "PositionCode": "', variables('PositionCode'), '", "ApprovalLink": "', variables('ApprovalLink'), '"}'))
