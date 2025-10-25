@@ -1,3 +1,2 @@
-first(match(outputs('Get_Full_Email_Body')?['body/Body'], '\d{8}'))
-
-first(match(outputs('Get_Full_Email_Body')?['body/Body'], '(?i)(?<=<a href=")([^"]+)(?=">Click here)'))
+Extract Position Code	first(match(outputs('Get_Full_Email_Body')?['body/Body'], '(?<=Position Title:.*?\()\d{8}'))
+Extract Link	first(match(outputs('Get_Full_Email_Body')?['body/Body'], '(?i)(?<=Please click\s<a href=")([^"]+)(?=">here)'))
