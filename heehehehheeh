@@ -1,8 +1,1 @@
-Expression for Extract Position Code (Use in your Compose step)
-
-Code snippet
 first(match(string(outputs('EmailBody')), '(?<=Position Title:.*?\()\d{8}'))
-2. Expression for Extract Link (Use in your Compose step)
-
-Code snippet
-first(match(string(outputs('EmailBody')), '(?i)(?<=Please click\s<a href=")([^"]+)(?=">here)'))
