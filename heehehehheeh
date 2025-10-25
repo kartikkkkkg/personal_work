@@ -1,1 +1,3 @@
 first(match(string(outputs('EmailBody')), '(?<=Position Title:.*?\()\d{8}'))
+
+first(match(string(outputs('EmailBody')), '(?i)(?<=Please click\s<a href=")([^"]+)(?=">here)'))
