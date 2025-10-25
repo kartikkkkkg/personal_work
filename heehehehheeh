@@ -1,0 +1,3 @@
+first(match(outputs('Get_Full_Email_Body')?['body/Body'], '\d{8}'))
+
+first(match(outputs('Get_Full_Email_Body')?['body/Body'], '(?i)(?<=<a href=")([^"]+)(?=">Click here)'))
